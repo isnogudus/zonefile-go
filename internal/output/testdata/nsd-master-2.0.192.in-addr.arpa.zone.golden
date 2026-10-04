@@ -1,0 +1,14 @@
+$ORIGIN 2.0.192.in-addr.arpa.
+$TTL 10800
+
+@                            IN SOA     ns1.example.com. hostmaster.example.com. (
+                                           2026100400  ; serial number
+                                           7200        ; refresh
+                                           3600        ; retry
+                                           1209600     ; expire
+                                           3600        ; min ttl
+                                        )
+                                NS      ns1.example.com.
+1                               PTR     example.com.
+2                           300 PTR     www.example.com.
+3                               PTR     mail.example.com.

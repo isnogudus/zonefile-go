@@ -6,8 +6,12 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"time"
 
+	"github.com/isnogudus/zonefile-go/internal/atomicfile"
 	"github.com/isnogudus/zonefile-go/internal/config"
+	"github.com/isnogudus/zonefile-go/internal/output"
+	"github.com/isnogudus/zonefile-go/internal/serial"
 	"github.com/isnogudus/zonefile-go/internal/zone"
 )
 
@@ -21,11 +25,16 @@ func usage() {
 	os.Exit(1)
 }
 
+func fatal(err error) {
+	fmt.Fprintln(os.Stderr, err)
+	os.Exit(1)
+}
+
 func main() {
 	var (
 		file       = flag.String("f", "/etc/zonefile.conf", "configuration file, - for stdin")
 		checkOnly  = flag.Bool("n", false, "check the configuration only")
-		output     = flag.String("o", "", "output file (unbound) or directory (nsd)")
+		outPath    = flag.String("o", "", "output file (unbound, default stdout) or directory (nsd, default nsd)")
 		serialFile = flag.String("s", ".serial", "serial number file")
 		format     = flag.String("t", "unbound", "output format: unbound or nsd")
 		showVer    = flag.Bool("V", false, "print version and exit")
@@ -50,19 +59,44 @@ func main() {
 
 	cfg, err := config.ParseFile(*file)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		fatal(err)
 	}
-	if _, err := zone.Resolve(cfg); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+	zones, err := zone.Resolve(cfg)
+	if err != nil {
+		fatal(err)
 	}
 	if *checkOnly {
 		fmt.Fprintln(os.Stderr, "configuration OK")
 		return
 	}
 
-	_, _ = *output, *serialFile
-	fmt.Fprintln(os.Stderr, "zonefile-go: output is not implemented yet")
-	os.Exit(1)
+	old, err := serial.Load(*serialFile)
+	if err != nil {
+		fatal(err)
+	}
+	next := serial.Next(old, time.Now())
+
+	switch *format {
+	case "unbound":
+		data := output.Unbound(zones, next)
+		if *outPath == "" {
+			_, err = os.Stdout.Write(data)
+		} else {
+			err = atomicfile.WriteFile(*outPath, data, 0o644)
+		}
+	case "nsd":
+		dir := *outPath
+		if dir == "" {
+			dir = "nsd"
+		}
+		err = output.WriteNSD(dir, zones, next)
+	}
+	if err != nil {
+		fatal(err)
+	}
+
+	// Only store the serial once the zones have been written.
+	if err := serial.Save(*serialFile, next); err != nil {
+		fatal(err)
+	}
 }

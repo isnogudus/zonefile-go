@@ -342,7 +342,7 @@ New checks, which `zonefile-rs` does not enforce:
 - **CNAMEs:** a CNAME must not share its name with any other record,
   including the zone apex.
 
-## Command line (sketch)
+## Command line
 
 Modelled on OpenBSD daemons:
 
@@ -354,7 +354,7 @@ zonefile-go [-nV] [-f file] [-o path] [-s serialfile] [-t unbound|nsd]
 |------|---------------------------------------------------------------|
 | `-f` | configuration file (default `/etc/zonefile.conf`, `-` = stdin) |
 | `-n` | check the configuration only, write nothing (like `pfctl -n`)  |
-| `-o` | output file (unbound) or directory (nsd); default stdout       |
+| `-o` | output file for unbound (default stdout), directory for nsd (default `nsd`) |
 | `-s` | serial file (default `.serial`)                                |
 | `-t` | output format, `unbound` (default) or `nsd`                    |
 | `-V` | print the version                                              |
@@ -382,9 +382,7 @@ zonefile-go [-nV] [-f file] [-o path] [-s serialfile] [-t unbound|nsd]
 
 ## Open questions
 
-1. **Duration suffixes in the output:** the output always writes seconds,
-   so the zone files stay byte-for-byte comparable with `zonefile-rs`.
-2. **Migration aid:** a subcommand that converts existing TOML/YAML into
+1. **Migration aid:** a subcommand that converts existing TOML/YAML into
    this syntax?
-3. **Defaults for `/etc`:** is `/etc/zonefile.conf` the right default path,
+2. **Defaults for `/etc`:** is `/etc/zonefile.conf` the right default path,
    or should the file have to be given with `-f`?

@@ -1,0 +1,12 @@
+zone:
+    name: example.com.
+    zonefile: master/example.com.zone
+
+zone:
+    name: 2.0.192.in-addr.arpa.
+    zonefile: master/2.0.192.in-addr.arpa.zone
+
+zone:
+    name: 0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa.
+    zonefile: master/0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa.zone
+

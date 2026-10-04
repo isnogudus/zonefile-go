@@ -1,0 +1,13 @@
+$ORIGIN 0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa.
+$TTL 10800
+
+@                            IN SOA     ns1.example.com. hostmaster.example.com. (
+                                           2026100400  ; serial number
+                                           7200        ; refresh
+                                           3600        ; retry
+                                           1209600     ; expire
+                                           3600        ; min ttl
+                                        )
+                                NS      ns1.example.com.
+1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0 PTR     example.com.
+2.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0 300 PTR   www.example.com.

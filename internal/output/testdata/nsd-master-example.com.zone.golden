@@ -1,0 +1,24 @@
+$ORIGIN example.com.
+$TTL 10800
+
+@                            IN SOA     ns2.example.com. hostmaster.example.com. (
+                                           2026100400  ; serial number
+                                           7200        ; refresh
+                                           3600        ; retry
+                                           1209600     ; expire
+                                           3600        ; min ttl
+                                        )
+                          86400 NS      ns2.example.com.
+                                MX   10 mail.example.com.
+                           7200 MX   20 backup-mx.example.net.
+@                               A       192.0.2.1
+                                AAAA    2001:db8::1
+ftp                         300 A       192.0.2.2
+                            300 AAAA    2001:db8::2
+mail                            A       192.0.2.3
+very-long-alias-name-for-column-tests 300 A 192.0.2.2
+                            300 AAAA    2001:db8::2
+www                         300 A       192.0.2.2
+                            300 AAAA    2001:db8::2
+_imaps._tcp                     SRV     0 1 993 mail.example.com.
+webmail                    3600 CNAME   www.example.com.
