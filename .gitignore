@@ -1,0 +1,12 @@
+# Build outputs
+/zonefile-go
+/dist/
+
+# Generated files
+.serial
+*.serial
+nsd/
+*.zone
+
+# macOS
+.DS_Store
