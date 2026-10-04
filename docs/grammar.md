@@ -72,7 +72,10 @@ A complete example that mirrors `zonefile-rs/zones.yaml` is in
 name = value
 ```
 
-`value` is a word, a string or a `{ }` list. The macro is used as `$name`,
+`value` is a word, a string or a `{ }` list. As in `pf.conf`, the contents
+of a quoted value are split into tokens again, so `lan = "{ a b }"` defines
+a list and macros inside it are expanded at definition time. The macro is
+used as `$name`,
 and the reference must form a complete token: `$prefix::1` is **not**
 expanded. Address prefixes are handled by [network](#network) instead. A macro must be defined
 before it is used. A list macro may appear wherever a list is allowed, and
@@ -289,7 +292,8 @@ Declares one reverse zone per network. The zone name is derived from the
 network (`192.168.0.0/16` → `168.192.in-addr.arpa.`,
 `fd00:1234:5678:1000::/64` → `…ip6.arpa.`). The optional block sets SOA
 values and nameservers for these zones; without a nameserver of its own a
-reverse zone uses the top-level ones.
+reverse zone uses the top-level ones. Nameservers in a `reverse` block must
+be absolute.
 
 Every address of a host with PTR enabled ends up in the reverse zone whose
 network contains it. Addresses outside every reverse network are skipped.
@@ -302,7 +306,9 @@ that is not ours, even without `no ptr`.
 
 ## Validation
 
-The parser reports errors as `file:line: message`, as OpenBSD tools do:
+The parser reports errors as `file:line: message`, as OpenBSD tools do.
+After an error it skips the rest of the statement and continues, so one run
+reports every syntax error:
 
 ```
 zones.conf:14: unknown option "tll"

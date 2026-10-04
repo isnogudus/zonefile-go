@@ -6,6 +6,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+
+	"github.com/isnogudus/zonefile-go/internal/config"
 )
 
 // version is set at build time via -ldflags "-X main.version=...".
@@ -45,7 +47,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	_, _, _, _ = *file, *checkOnly, *output, *serialFile
-	fmt.Fprintln(os.Stderr, "zonefile-go: not implemented yet, see docs/grammar.md")
+	if _, err := config.ParseFile(*file); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if *checkOnly {
+		fmt.Fprintln(os.Stderr, "configuration OK")
+		return
+	}
+
+	_, _ = *output, *serialFile
+	fmt.Fprintln(os.Stderr, "zonefile-go: output is not implemented yet")
 	os.Exit(1)
 }
