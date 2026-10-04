@@ -564,12 +564,58 @@ func (p *parser) email() (string, bool) {
 		return "", p.expected("e-mail address")
 	}
 	p.advance()
-	local, domain, found := strings.Cut(t.text, "@")
-	if !found || local == "" || domain == "" || strings.Contains(domain, "@") {
-		p.errorf(t.pos, "invalid e-mail address %q", t.text)
+	if err := validEmail(t.text); err != nil {
+		p.errorf(t.pos, "invalid e-mail address %q: %v", t.text, err)
 		return "", false
 	}
 	return t.text, true
+}
+
+func isAlnum(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
+}
+
+// validEmail applies the checks of zonefile-rs: a dot-atom local part of at
+// most 64 characters and a domain of at least two labels with a TLD that is
+// not all digits. A trailing dot on the domain is allowed.
+func validEmail(email string) error {
+	if len(email) > 254 {
+		return fmt.Errorf("longer than 254 characters")
+	}
+	local, domain, found := strings.Cut(email, "@")
+	switch {
+	case !found:
+		return fmt.Errorf(`missing "@"`)
+	case local == "":
+		return fmt.Errorf("empty local part")
+	case len(local) > 64:
+		return fmt.Errorf("local part longer than 64 characters")
+	case local[0] == '.' || local[len(local)-1] == '.' || strings.Contains(local, ".."):
+		return fmt.Errorf("misplaced dot in local part")
+	}
+	for i := 0; i < len(local); i++ {
+		if c := local[i]; !isAlnum(c) && !strings.ContainsRune(".+-_", rune(c)) {
+			return fmt.Errorf("invalid character %q in local part", c)
+		}
+	}
+	labels := strings.Split(strings.TrimSuffix(domain, "."), ".")
+	if len(labels) < 2 {
+		return fmt.Errorf("domain needs at least two labels")
+	}
+	for _, l := range labels {
+		if l == "" || len(l) > 63 || l[0] == '-' || l[len(l)-1] == '-' {
+			return fmt.Errorf("invalid domain label %q", l)
+		}
+		for i := 0; i < len(l); i++ {
+			if !isAlnum(l[i]) && l[i] != '-' {
+				return fmt.Errorf("invalid character %q in domain", l[i])
+			}
+		}
+	}
+	if strings.Trim(labels[len(labels)-1], "0123456789") == "" {
+		return fmt.Errorf("top-level domain is all digits")
+	}
+	return nil
 }
 
 func (p *parser) prefix() (netip.Prefix, bool) {

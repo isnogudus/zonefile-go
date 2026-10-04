@@ -8,6 +8,7 @@ import (
 	"os"
 
 	"github.com/isnogudus/zonefile-go/internal/config"
+	"github.com/isnogudus/zonefile-go/internal/zone"
 )
 
 // version is set at build time via -ldflags "-X main.version=...".
@@ -47,7 +48,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	if _, err := config.ParseFile(*file); err != nil {
+	cfg, err := config.ParseFile(*file)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if _, err := zone.Resolve(cfg); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

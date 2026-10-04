@@ -39,7 +39,7 @@ func TestParseExample(t *testing.T) {
 	wantHosts := map[string]int{
 		"internal.example.com": 1,
 		"apps.example.com":     5,
-		"example.com":          27,
+		"example.com":          26,
 		"dmz.example.com":      10,
 		"iot.example.com":      3,
 		"devices.example.com":  43,
@@ -206,6 +206,10 @@ func TestParseErrors(t *testing.T) {
 			`test.conf:1: duration "0" out of range (1-2147483647 seconds)`}},
 		{"set after block", "zone a {\n}\nset ttl 1h\n", []string{
 			`test.conf:3: set must come before the first zone or reverse block`}},
+		{"email without at", "set email admin.example.com\n", []string{
+			`test.conf:1: invalid e-mail address "admin.example.com": missing "@"`}},
+		{"email numeric tld", "set email a@example.123\n", []string{
+			`test.conf:1: invalid e-mail address "a@example.123": top-level domain is all digits`}},
 		{"undefined macro", "nameserver $ns\n", []string{
 			`test.conf:1: undefined macro "$ns"`}},
 		{"keyword macro", "host = 1\n", []string{

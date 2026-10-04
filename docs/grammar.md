@@ -329,11 +329,18 @@ New checks, which `zonefile-rs` does not enforce:
 
 - **Prefix alignment:** the prefix length of a reverse network must be a
   multiple of 8 (IPv4) or 4 (IPv6). `zonefile-rs` silently rounds down.
-- **Unique PTRs:** if two hosts would produce a PTR for the same address,
-  that is an error. `zonefile-rs` silently keeps one of them.
+- **Unique PTRs:** if two hosts would produce a PTR for the same address
+  inside a reverse network, that is an error. `zonefile-rs` silently keeps
+  one of them. Outside the reverse networks the same address may appear in
+  several zones, since no PTR is generated for it.
 - **Address suffixes:** see [network](#network).
-- **Duplicates:** a `zone` must not be declared twice, a host name must not
-  appear twice in a zone, and a CNAME must not collide with another name.
+- **Duplicates:** a `zone` must not be declared twice (names compare case
+  insensitively), a host name must not appear twice in a zone, and the
+  same name with the same address must not come out twice, e.g. once as a
+  host and once as an alias of another host. Several hosts may share an
+  alias with *different* addresses (round robin).
+- **CNAMEs:** a CNAME must not share its name with any other record,
+  including the zone apex.
 
 ## Command line (sketch)
 
