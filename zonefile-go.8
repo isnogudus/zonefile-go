@@ -1,0 +1,191 @@
+.Dd October 5, 2026
+.Dt ZONEFILE-GO 8
+.Os
+.Sh NAME
+.Nm zonefile-go
+.Nd generate Unbound and NSD zone data
+.Sh SYNOPSIS
+.Nm
+.Op Fl n
+.Op Fl f Ar file
+.Op Fl o Ar path
+.Op Fl s Ar serialfile
+.Op Fl t Cm unbound | nsd
+.Nm
+.Fl V
+.Sh DESCRIPTION
+.Nm
+reads forward zones, hosts and reverse networks from a configuration file
+in the format described in
+.Xr zonefile.conf 5
+and writes the zone data for
+.Xr unbound 8
+or
+.Xr nsd 8 .
+PTR records are generated from the addresses of the hosts, for the
+networks declared as reverse zones.
+.Pp
+The configuration is checked completely before anything is written.
+All errors are reported, one per line, in the form
+.Ar file : Ns Ar line : message .
+.Pp
+The options are as follows:
+.Bl -tag -width Ds
+.It Fl f Ar file
+Read the configuration from
+.Ar file .
+If
+.Ar file
+is
+.Sq - ,
+read it from standard input; relative include paths are then resolved
+against the current directory.
+The default is
+.Pa /etc/zonefile.conf .
+.It Fl n
+Configtest mode.
+Only check the configuration file for validity and print
+.Dq configuration OK
+to standard error.
+Nothing is written and the serial is not changed.
+.It Fl o Ar path
+Where to write the output.
+For
+.Cm unbound ,
+.Ar path
+is a file, written atomically; without
+.Fl o
+the output goes to standard output.
+For
+.Cm nsd ,
+.Ar path
+is a directory, by default
+.Pa nsd .
+.It Fl s Ar serialfile
+Keep the last serial in
+.Ar serialfile .
+The default is
+.Pa .serial
+in the current directory.
+.It Fl t Cm unbound | nsd
+The output format.
+The default is
+.Cm unbound .
+.Bl -tag -width unbound
+.It Cm unbound
+A fragment of
+.Xr unbound.conf 5
+with a
+.Ic server
+clause and one
+.Ic local-zone
+with its
+.Ic local-data
+and
+.Ic local-data-ptr
+statements per zone.
+.It Cm nsd
+The file
+.Pa zones.conf ,
+with one
+.Ic zone
+clause per zone for inclusion into
+.Xr nsd.conf 5 ,
+and one zone file per zone in the subdirectory
+.Pa master .
+Every file is written atomically, the zone files before
+.Pa zones.conf .
+Zone files named in the previous
+.Pa zones.conf
+whose zones are no longer configured are removed afterwards and reported
+on standard error.
+Other files in
+.Pa master
+are left alone.
+.El
+.It Fl V
+Print the version and exit.
+.El
+.Ss Serial numbers
+Unless a zone sets a fixed serial with
+.Ic set serial ,
+all zones get the same serial in the format
+.Ar YYYYMMDDnn :
+the current date in UTC with
+.Ar nn
+set to 00, or the previous serial plus one if that is larger.
+Several runs on one day therefore count up, and the serial never goes
+back.
+The new serial is stored in the serial file only after the output has been
+written.
+.Sh FILES
+.Bl -tag -width "/etc/zonefile.conf" -compact
+.It Pa /etc/zonefile.conf
+Default configuration file.
+.It Pa .serial
+Default serial file.
+.El
+.Sh EXIT STATUS
+.Ex -std
+.Sh EXAMPLES
+Check a configuration:
+.Bd -literal -offset indent
+# zonefile-go -n -f /etc/zonefile.conf
+.Ed
+.Pp
+Generate local data for
+.Xr unbound 8
+and reload it:
+.Bd -literal -offset indent
+# zonefile-go -s /var/unbound/etc/zonefile.serial \e
+	-o /var/unbound/etc/zones.conf
+# unbound-control reload
+.Ed
+.Pp
+with
+.Bd -literal -offset indent
+include: "/var/unbound/etc/zones.conf"
+.Ed
+.Pp
+in
+.Pa /var/unbound/etc/unbound.conf .
+.Pp
+Generate zones for
+.Xr nsd 8
+and reload them:
+.Bd -literal -offset indent
+# zonefile-go -t nsd -o /var/nsd/zones -s /var/nsd/zonefile.serial
+# nsd-control reconfig && nsd-control reload
+.Ed
+.Pp
+with
+.Bd -literal -offset indent
+include: "/var/nsd/zones/zones.conf"
+.Ed
+.Pp
+in
+.Pa /var/nsd/etc/nsd.conf .
+The
+.Ic zonefile
+paths in
+.Pa zones.conf
+start with
+.Pa master/ ,
+so
+.Ic zonesdir
+in
+.Xr nsd.conf 5
+has to be the output directory,
+.Pa /var/nsd/zones
+here.
+.Sh SEE ALSO
+.Xr nsd.conf 5 ,
+.Xr unbound.conf 5 ,
+.Xr zonefile.conf 5 ,
+.Xr nsd 8 ,
+.Xr unbound 8
+.Sh HISTORY
+.Nm
+succeeds zonefile, written in Python, and zonefile-rs, written in Rust,
+which read YAML or TOML.
+For the same zones it writes the same records.

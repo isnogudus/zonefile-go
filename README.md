@@ -51,6 +51,11 @@ zonefile-go -f zones.conf -o unbound-zones.conf
 zonefile-go -f zones.conf -t nsd -o /var/nsd/zones
 ```
 
+With `-t nsd`, zone files of zones that were removed from the configuration
+are deleted from `master/`. Only files named in the previous `zones.conf`
+are considered, so zone files maintained by hand in the same directory are
+left alone.
+
 The SOA serial is `YYYYMMDDnn` (UTC date, counting up within a day) unless
 a zone sets `set serial`. The last serial is kept in the serial file, which
 is only updated after the output has been written.
@@ -58,8 +63,16 @@ is only updated after the output has been written.
 ## Building
 
 ```
-go build
+make                  # zonefile-go for this system
+make build-openbsd    # zonefile-go-openbsd-amd64
+make build-all        # OpenBSD, FreeBSD and Linux binaries
+make test             # go vet and the tests with -race
+make install          # to /usr/local; PREFIX, DESTDIR and MANDIR are honoured
+make man              # check and show the manual pages
 ```
+
+The manual pages are [zonefile-go(8)](zonefile-go.8) and
+[zonefile.conf(5)](zonefile.conf.5).
 
 ## License
 

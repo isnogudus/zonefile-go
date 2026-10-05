@@ -1,0 +1,295 @@
+.Dd October 5, 2026
+.Dt ZONEFILE.CONF 5
+.Os
+.Sh NAME
+.Nm zonefile.conf
+.Nd zonefile-go configuration file
+.Sh DESCRIPTION
+.Nm
+describes forward zones, their hosts and records, and the networks for
+which
+.Xr zonefile-go 8
+generates reverse zones.
+.Pp
+The file has these sections, in this order:
+.Bl -tag -width xxxx
+.It Sy Macros
+User-defined variables that may be used later in the file.
+.It Sy Global configuration
+Defaults for all zones, and default nameservers and mail exchangers.
+.It Sy Reverse zones
+The networks for which PTR records are served.
+.It Sy Zones
+The forward zones with their hosts, aliases and records.
+.El
+.Pp
+Macros may be defined and
+.Ic include
+may be used anywhere at top level.
+Global
+.Ic set
+statements must come before the first
+.Ic zone
+or
+.Ic reverse
+block.
+.Pp
+Each statement ends at the end of the line.
+A backslash at the very end of a line continues the statement on the next
+line.
+Comments start with
+.Sq #
+and run to the end of the line.
+Words are separated by whitespace; a value containing spaces or special
+characters has to be enclosed in double quotes, in which
+.Sq \e\(dq
+and
+.Sq \e\e
+are the only escapes.
+.Pp
+Lists are enclosed in curly braces and may span several lines; commas
+between their items are optional:
+.Bd -literal -offset indent
+alias { www, ftp
+        mail }
+.Ed
+.Pp
+A block, such as
+.Ic zone ,
+opens with a curly brace at the end of the line and closes with one on a
+line of its own.
+.Pp
+Durations are given in seconds, or as numbers with the units
+.Cm s ,
+.Cm m ,
+.Cm h ,
+.Cm d
+and
+.Cm w ,
+as in
+.Cm 3h
+or
+.Cm 1h30m .
+.Sh MACROS
+A macro is defined as
+.Bd -literal -offset indent
+name = value
+.Ed
+.Pp
+and used as
+.Ar $name .
+Macro names consist of letters, digits and underscores, do not start with
+a digit and must not be keywords.
+As in
+.Xr pf.conf 5 ,
+the content of a quoted value is split into words again, so that
+.Bd -literal -offset indent
+lan = "{ 192.168.21.0/24 fd00:1234:5678:1000::/64 }"
+.Ed
+.Pp
+defines a list.
+Macros are expanded where they are defined, and a reference must form a
+whole word:
+.Ar $prefix::1
+is not expanded.
+.Bl -tag -width Ds
+.It Ic include Ar file
+Read
+.Ar file ,
+which must be quoted, at this point.
+A relative path is resolved against the directory of the including file.
+.El
+.Sh GLOBAL CONFIGURATION
+.Bl -tag -width Ds
+.It Ic set Ar option value
+Set a default.
+At top level it applies to all zones; inside a
+.Ic zone
+or
+.Ic reverse
+block it applies to that block and must come before its first record.
+Each option may be set once per scope.
+.Bl -tag -width "srv-priority"
+.It Ic email Ar address
+Contact address for the SOA record.
+Required.
+.It Ic ttl Ar duration
+Default TTL of the zone and its records; default 3h.
+.It Ic refresh Ar duration
+SOA refresh; default 2h.
+.It Ic retry Ar duration
+SOA retry; default 1h.
+Must be less than
+.Ic refresh .
+.It Ic expire Ar duration
+SOA expire; default 2w.
+.It Ic negative-ttl Ar duration
+SOA minimum, the TTL of negative answers; default 1h.
+.It Ic serial Ar number
+A fixed serial instead of the computed one.
+.It Ic mx-priority Ar number
+Priority of
+.Ic mx
+records that give none; default 0.
+Not allowed in
+.Ic reverse
+blocks.
+.It Ic srv-priority Ar number
+Priority of
+.Ic srv
+records that give none; default 5.
+Not allowed in
+.Ic reverse
+blocks.
+.It Ic srv-weight Ar number
+Weight of
+.Ic srv
+records that give none; default 10.
+Not allowed in
+.Ic reverse
+blocks.
+.It Ic ptr Cm yes | no
+Whether hosts get PTR records; default yes.
+Not allowed in
+.Ic reverse
+blocks.
+.El
+.It Ic nameserver Ar name | { name ... } Op Ic ttl Ar duration
+At top level, the nameservers of every zone that declares none of its
+own.
+The first nameserver is the primary of the SOA record.
+At top level the names must be absolute, that is end in a dot.
+.It Ic mx Ar name Oo Ic priority Ar number Oc Op Ic ttl Ar duration
+At top level, a mail exchanger for every zone that declares none of its
+own.
+The name must be absolute.
+.El
+.Sh REVERSE ZONES
+.Bl -tag -width Ds
+.It Ic reverse Ar network | { network ... } Op { ... }
+Declare one reverse zone per network, named after it:
+192.168.0.0/16 becomes 168.192.in-addr.arpa.
+The prefix length must be a multiple of 8 for IPv4 and of 4 for IPv6, and
+the networks must not overlap.
+.Pp
+Every address of a host with PTR records enabled gets a PTR record in the
+reverse zone whose network contains it.
+Addresses outside every reverse network get none, so external addresses
+in forward zones never lead to PTR records for zones that are not served.
+.Pp
+The optional block may contain
+.Ic set
+statements for the SOA values and
+.Ic nameserver
+statements with absolute names.
+.El
+.Sh ZONES
+.Bl -tag -width Ds
+.It Ic zone Ar name No { ... }
+Declare a forward zone; the trailing dot of
+.Ar name
+is optional.
+.El
+.Pp
+Inside a zone, a name that does not end in a dot is relative to the zone,
+.Sq @
+is the zone itself and
+.Sq *
+a wildcard label.
+A zone may contain:
+.Bl -tag -width Ds
+.It Ic set Ar option value
+As in the global configuration.
+.It Ic network Ar network | { network ... }
+The networks that address suffixes of this zone are resolved against: at
+most one IPv4 and one IPv6 network.
+Must come before the first
+.Ic host .
+.It Ic nameserver Ar name | { name ... } Op Ic ttl Ar duration
+The nameservers of the zone.
+.It Ic mx Ar name Oo Ic priority Ar number Oc Op Ic ttl Ar duration
+A mail exchanger of the zone.
+.It Xo
+.Ic host Ar name address | { address ... }
+.Op Ic alias Ar name | { name ... }
+.Op Ic ttl Ar duration
+.Op Oo Ic no Oc Ic ptr
+.Op Ic no inet
+.Op Ic no inet6
+.Xc
+Create one A or AAAA record per address.
+An address is a full IPv4 or IPv6 address, or a suffix such as
+.Cm .37
+or
+.Cm .21.37 ,
+which yields one address per network of the zone: the suffix is read as a
+number and placed into the host part of the network, so that
+.Cm .37
+becomes 192.168.21.37 in 192.168.21.0/24 and fd00::25 in fd00::/64.
+A zone with only an IPv4 network therefore gets only A records from
+suffixes.
+.Pp
+Each
+.Ic alias
+gets the same addresses as additional A and AAAA records, but no PTR
+record.
+.Ic no inet
+and
+.Ic no inet6
+drop the addresses of that family, for hosts without IPv6 in a zone with
+both networks.
+.Ic ptr
+and
+.Ic no ptr
+override
+.Ic set ptr
+for this host.
+Wildcard hosts never get PTR records.
+.It Ic cname Ar name target Op Ic ttl Ar duration
+A CNAME record.
+Its name must not be used by any other record of the zone.
+.It Xo
+.Ic srv Ar _service._proto target Ic port Ar number
+.Op Ic priority Ar number
+.Op Ic weight Ar number
+.Op Ic ttl Ar duration
+.Xc
+An SRV record.
+.El
+.Pp
+Within a zone, a host must not be declared twice, and the same name with
+the same address must not result twice.
+Two hosts producing a PTR record for the same address in a reverse zone is
+an error as well.
+.Sh FILES
+.Bl -tag -width "/usr/local/share/examples/zonefile-go/zonefile.conf" -compact
+.It Pa /etc/zonefile.conf
+Default configuration file.
+.It Pa /usr/local/share/examples/zonefile-go/zonefile.conf
+Example configuration file.
+.El
+.Sh EXAMPLES
+.Bd -literal -offset indent
+lan = "{ 192.168.1.0/24 fd00:1::/64 }"
+
+set email hostmaster@example.com
+nameserver ns1.example.com.
+
+reverse { 192.168.1.0/24 fd00:1::/64 }
+
+zone example.com {
+	network $lan
+	mx mail priority 10
+
+	host router .1 alias { @ ns1 www }
+	host mail   .3
+	host printer .12 no inet6
+	host gateway 203.0.113.1 no ptr
+
+	cname webmail mail
+	srv _imaps._tcp mail port 993
+}
+.Ed
+.Sh SEE ALSO
+.Xr pf.conf 5 ,
+.Xr zonefile-go 8

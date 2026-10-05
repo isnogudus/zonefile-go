@@ -1,5 +1,6 @@
 # Build outputs
 /zonefile-go
+/zonefile-go-*
 /dist/
 
 # Generated files
