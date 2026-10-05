@@ -1,41 +1,18 @@
 package config
 
 import (
-	"fmt"
 	"net/netip"
-	"strings"
+
+	"github.com/isnogudus/obsdconf"
 )
 
-// Pos is a position in a configuration file.
-type Pos struct {
-	File string
-	Line int
-}
-
-func (p Pos) String() string {
-	return fmt.Sprintf("%s:%d", p.File, p.Line)
-}
-
-// Error is a problem found at a position in the configuration.
-type Error struct {
-	Pos Pos
-	Msg string
-}
-
-func (e *Error) Error() string {
-	return e.Pos.String() + ": " + e.Msg
-}
-
-// ErrorList holds all errors found while parsing, in input order.
-type ErrorList []*Error
-
-func (l ErrorList) Error() string {
-	msgs := make([]string, len(l))
-	for i, e := range l {
-		msgs[i] = e.Error()
-	}
-	return strings.Join(msgs, "\n")
-}
+// Pos, Error and ErrorList come from obsdconf, so that the later stages
+// report errors in the same form.
+type (
+	Pos       = obsdconf.Pos
+	Error     = obsdconf.Error
+	ErrorList = obsdconf.ErrorList
+)
 
 // Config is a parsed zonefile.conf. It holds the values as written: names
 // are not yet made absolute, suffixes are not resolved and defaults are not

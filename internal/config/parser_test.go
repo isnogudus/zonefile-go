@@ -203,7 +203,9 @@ func TestParseErrors(t *testing.T) {
 		{"option twice", "set ttl 1h\nset ttl 2h\n", []string{
 			`test.conf:2: "ttl" given twice`}},
 		{"ttl zero", "set ttl 0\n", []string{
-			`test.conf:1: duration "0" out of range (1-2147483647 seconds)`}},
+			`test.conf:1: duration "0" out of range (1s-2147483647s)`}},
+		{"sub-second ttl", "set ttl 1500ms\n", []string{
+			`test.conf:1: duration "1500ms" must be whole seconds`}},
 		{"set after block", "zone a {\n}\nset ttl 1h\n", []string{
 			`test.conf:3: set must come before the first zone or reverse block`}},
 		{"email without at", "set email admin.example.com\n", []string{
