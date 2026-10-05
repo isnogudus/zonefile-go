@@ -2,7 +2,9 @@ package output
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -30,12 +32,70 @@ func NSDFiles(zones []*zone.Zone, serial uint32) map[string][]byte {
 	return files
 }
 
+// generatedZoneFiles returns the zone files listed in the zones.conf below
+// dir, which is the record of what an earlier run wrote. Only entries of
+// the form master/<file> are returned, so that nothing outside master can
+// be named.
+func generatedZoneFiles(dir string) ([]string, error) {
+	data, err := os.ReadFile(filepath.Join(dir, "zones.conf"))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var files []string
+	for _, line := range strings.Split(string(data), "\n") {
+		value, ok := strings.CutPrefix(strings.TrimSpace(line), "zonefile:")
+		if !ok {
+			continue
+		}
+		file := strings.TrimSpace(value)
+		base, ok := strings.CutPrefix(file, "master/")
+		if !ok || base == "" || base != filepath.Base(base) || base == "." || base == ".." {
+			continue
+		}
+		files = append(files, file)
+	}
+	return files, nil
+}
+
 // WriteNSD writes the files of NSDFiles below dir, each one atomically.
-func WriteNSD(dir string, zones []*zone.Zone, serial uint32) error {
+// Zone files that the previous zones.conf named but that are no longer
+// generated are removed afterwards; other files in master are left alone.
+// It returns the removed files, relative to dir.
+func WriteNSD(dir string, zones []*zone.Zone, serial uint32) ([]string, error) {
 	files := NSDFiles(zones, serial)
 	if err := os.MkdirAll(filepath.Join(dir, "master"), 0o755); err != nil {
-		return err
+		return nil, err
 	}
+	previous, err := generatedZoneFiles(dir)
+	if err != nil {
+		return nil, err
+	}
+	if err := writeFiles(dir, files); err != nil {
+		return nil, err
+	}
+
+	// Only after zones.conf no longer names them.
+	var removed []string
+	for _, file := range previous {
+		if _, current := files[file]; current {
+			continue
+		}
+		err := os.Remove(filepath.Join(dir, file))
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return removed, err
+		}
+		removed = append(removed, file)
+	}
+	return removed, nil
+}
+
+func writeFiles(dir string, files map[string][]byte) error {
 	// Zone files first, so that zones.conf never names a missing file.
 	names := make([]string, 0, len(files))
 	for name := range files {

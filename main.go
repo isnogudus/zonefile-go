@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/isnogudus/zonefile-go/internal/atomicfile"
@@ -89,7 +90,11 @@ func main() {
 		if dir == "" {
 			dir = "nsd"
 		}
-		err = output.WriteNSD(dir, zones, next)
+		var removed []string
+		removed, err = output.WriteNSD(dir, zones, next)
+		for _, file := range removed {
+			fmt.Fprintf(os.Stderr, "removed %s\n", filepath.Join(dir, file))
+		}
 	}
 	if err != nil {
 		fatal(err)
