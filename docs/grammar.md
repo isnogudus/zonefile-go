@@ -363,6 +363,18 @@ New checks, which `zonefile-rs` does not enforce:
 - **CNAMEs:** a CNAME must not share its name with any other record,
   including the zone apex.
 
+Warnings do not stop the zones from being written. There is one: a
+relative name that looks like a full one, because it repeats the zone name
+or ends in a top-level domain (a two-letter country code, `com`, `net`,
+`org`, `arpa`, `local`, `internal` and a few more). Without the trailing
+dot the zone name is appended:
+
+```
+zones.conf:12: warning: "mail.home.arpa" ends in the top-level domain arpa
+but is relative, so it becomes mail.home.arpa.h.example.net.; add a trailing
+dot if you mean mail.home.arpa.
+```
+
 ## Command line
 
 Modelled on OpenBSD daemons:

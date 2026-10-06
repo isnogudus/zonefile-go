@@ -20,7 +20,7 @@ func loadZones(t *testing.T) []*zone.Zone {
 	if err != nil {
 		t.Fatal(err)
 	}
-	zones, err := zone.Resolve(cfg)
+	zones, _, err := zone.Resolve(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

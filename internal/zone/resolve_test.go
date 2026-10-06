@@ -16,7 +16,8 @@ func resolve(t *testing.T, src string) ([]*Zone, error) {
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	return Resolve(cfg)
+	zones, _, err := Resolve(cfg)
+	return zones, err
 }
 
 func mustResolve(t *testing.T, src string) []*Zone {
@@ -61,9 +62,12 @@ func TestResolveExample(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseFile: %v", err)
 	}
-	zones, err := Resolve(cfg)
+	zones, warnings, err := Resolve(cfg)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Errorf("example has warnings:\n%v", warnings)
 	}
 
 	var names []string
@@ -348,4 +352,64 @@ zone b.example {
 	host y 203.0.113.1
 }
 `)
+}
+
+func TestLooksAbsolute(t *testing.T) {
+	tests := []struct {
+		name, origin, want string
+	}{
+		{"mail.home.arpa", "h.example.net.", "ends in the top-level domain arpa"},
+		{"mail.h.example.net", "h.example.net.", "repeats the zone name"},
+		{"H.Example.Net", "h.example.net.", "repeats the zone name"},
+		{"backup-mx.example.net", "example.com.", "ends in the top-level domain net"},
+		{"printer.local", "example.com.", "ends in the top-level domain local"},
+		{"www.example.de", "example.com.", "ends in the top-level domain de"},
+		{"mail.home.arpa.", "h.example.net.", ""},
+		{"mail", "h.example.net.", ""},
+		{"@", "h.example.net.", ""},
+		{"_imaps._tcp", "example.com.", ""},
+		{"db.services", "example.com.", ""},
+		{"node1.cluster", "example.com.", ""},
+		{"a.b2", "example.com.", ""},
+	}
+	for _, tt := range tests {
+		if got := looksAbsolute(tt.name, tt.origin); got != tt.want {
+			t.Errorf("looksAbsolute(%q, %q) = %q, want %q", tt.name, tt.origin, got, tt.want)
+		}
+	}
+}
+
+func TestResolveWarnings(t *testing.T) {
+	cfg, err := config.Parse("test.conf", strings.NewReader(`
+email admin@example.com
+nameserver ns1.home.arpa.
+zone h.example.net {
+	host mail.h.example.net 192.0.2.1
+	cname mail mail.home.arpa
+	cname ok mail.home.arpa.
+	mx mail
+}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	zones, warnings, err := Resolve(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, w := range warnings {
+		got = append(got, w.Error())
+	}
+	want := []string{
+		`test.conf:5: warning: "mail.h.example.net" repeats the zone name but is relative, so it becomes mail.h.example.net.h.example.net.; add a trailing dot if you mean mail.h.example.net.`,
+		`test.conf:6: warning: "mail.home.arpa" ends in the top-level domain arpa but is relative, so it becomes mail.home.arpa.h.example.net.; add a trailing dot if you mean mail.home.arpa.`,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got\n  %s\nwant\n  %s", strings.Join(got, "\n  "), strings.Join(want, "\n  "))
+	}
+	// Warnings do not change the result.
+	if c := zones[0].CNAMEs[0]; c.Target != "mail.home.arpa.h.example.net." {
+		t.Errorf("cname target = %q", c.Target)
+	}
 }

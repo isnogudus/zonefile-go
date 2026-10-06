@@ -183,6 +183,10 @@ Inside a zone, a name that does not end in a dot is relative to the zone,
 is the zone itself and
 .Sq *
 a wildcard label.
+A relative name that repeats the zone name or ends in a top-level domain,
+such as
+.Sq mail.home.arpa ,
+gets a warning, since it was probably meant to be absolute.
 A zone may contain:
 .Bl -tag -width Ds
 .It Ic email , ttl , refresh , retry , expire , negative-ttl , serial

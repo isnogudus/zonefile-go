@@ -62,7 +62,10 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
-	zones, err := zone.Resolve(cfg)
+	zones, warnings, err := zone.Resolve(cfg)
+	for _, w := range warnings {
+		fmt.Fprintln(os.Stderr, w)
+	}
 	if err != nil {
 		fatal(err)
 	}

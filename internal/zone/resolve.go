@@ -62,28 +62,40 @@ type ptrCandidate struct {
 }
 
 type resolver struct {
-	cfg  *config.Config
-	errs config.ErrorList
+	cfg   *config.Config
+	errs  config.ErrorList
+	warns config.ErrorList
 }
 
 func (r *resolver) errorf(pos config.Pos, format string, args ...any) {
 	r.errs = append(r.errs, &config.Error{Pos: pos, Msg: fmt.Sprintf(format, args...)})
 }
 
-// name makes name absolute relative to origin and validates it.
+func (r *resolver) warnf(pos config.Pos, format string, args ...any) {
+	r.warns = append(r.warns, &config.Error{Pos: pos, Msg: "warning: " + fmt.Sprintf(format, args...)})
+}
+
+// name makes name absolute relative to origin and validates it. A
+// relative name that looks like a full one gets a warning, since a missing
+// trailing dot silently appends the zone name.
 func (r *resolver) name(pos config.Pos, name, origin string) (string, bool) {
 	abs := absolute(name, origin)
 	if err := validName(abs); err != nil {
 		r.errorf(pos, "%v", err)
 		return "", false
 	}
+	if why := looksAbsolute(name, origin); why != "" {
+		r.warnf(pos, "%q %s but is relative, so it becomes %s; add a trailing dot if you mean %s.",
+			name, why, abs, name)
+	}
 	return abs, true
 }
 
 // Resolve builds the forward zones of cfg, in configuration order,
-// followed by its reverse zones. On failure the error is a
+// followed by its reverse zones. It also returns warnings, which do not
+// stop the zones from being built. On failure the error is a
 // config.ErrorList with every problem found.
-func Resolve(cfg *config.Config) ([]*Zone, error) {
+func Resolve(cfg *config.Config) ([]*Zone, config.ErrorList, error) {
 	r := &resolver{cfg: cfg}
 	global := defaults().with(cfg.Options)
 
@@ -107,9 +119,9 @@ func Resolve(cfg *config.Config) ([]*Zone, error) {
 	zones = append(zones, r.reverse(global, ptrs)...)
 
 	if len(r.errs) > 0 {
-		return nil, r.errs
+		return nil, r.warns, r.errs
 	}
-	return zones, nil
+	return zones, r.warns, nil
 }
 
 func (r *resolver) soa(pos config.Pos, name string, s settings) SOA {
