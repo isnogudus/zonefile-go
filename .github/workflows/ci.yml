@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: test -z "$(gofmt -l .)"
+      - run: go vet ./...
+      - run: go test -race ./...
+      - name: check the example configuration
+        run: go run . -n -f examples/zones.conf
+      - name: cross-compile
+        run: |
+          for t in openbsd/amd64 freebsd/amd64 linux/amd64 linux/arm64; do
+            CGO_ENABLED=0 GOOS=${t%/*} GOARCH=${t#*/} go build -o /dev/null .
+          done
+      - name: lint man pages
+        run: |
+          sudo apt-get install -y -qq mandoc >/dev/null
+          # Only messages about our pages count; pages of other systems are
+          # not installed here, and the runner's mandoc.db is not ours.
+          out=$(mandoc -Tlint zonefile-go.8 zonefile.conf.5 2>&1 |
+            grep -E 'zonefile-go\.8:|zonefile\.conf\.5:' |
+            grep -v 'referenced manual not found' || true)
+          echo "$out"
+          test -z "$out"
