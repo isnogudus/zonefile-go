@@ -148,12 +148,17 @@ records that give none; default 10.
 Not allowed in
 .Ic reverse
 blocks.
-.It Ic ptr Cm yes | no
-Whether hosts get PTR records; default yes.
-Not allowed in
+.El
+.It Oo Ic no Oc Ic ptr
+Whether hosts get PTR records; by default they do.
+At top level this sets the default for all zones; inside a
+.Ic zone
+it overrides it for that zone.
+It follows the same ordering rule as
+.Ic set
+and is not allowed in
 .Ic reverse
 blocks.
-.El
 .It Ic nameserver Ar name | { name ... } Op Ic ttl Ar duration
 At top level, the nameservers of every zone that declares none of its
 own.
@@ -161,7 +166,8 @@ The first nameserver is the primary of the SOA record.
 At top level the names must be absolute, that is end in a dot.
 .It Ic mx Ar name Oo Ic priority Ar number Oc Op Ic ttl Ar duration
 At top level, a mail exchanger for every zone that declares none of its
-own.
+own and does not say
+.Ic no mx .
 The name must be absolute.
 .El
 .Sh REVERSE ZONES
@@ -200,6 +206,13 @@ A zone may contain:
 .Bl -tag -width Ds
 .It Ic set Ar option value
 As in the global configuration.
+.It Oo Ic no Oc Ic ptr
+As in the global configuration.
+.It Ic no mx
+The zone has no MX records, not even the top-level ones.
+Not allowed together with
+.Ic mx
+in the same zone.
 .It Ic network Ar network | { network ... }
 The networks that address suffixes of this zone are resolved against: at
 most one IPv4 and one IPv6 network.
@@ -241,9 +254,7 @@ both networks.
 .Ic ptr
 and
 .Ic no ptr
-override
-.Ic set ptr
-for this host.
+override the setting of the zone for this host.
 Wildcard hosts never get PTR records.
 .It Ic cname Ar name target Op Ic ttl Ar duration
 A CNAME record.

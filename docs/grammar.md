@@ -97,7 +97,7 @@ EBNF. Terminals are quoted. `NL` is a newline that ends a statement.
 
 ```
 config        = { [ toplevel ] NL } .
-toplevel      = macro | include | set | nameserver | mx | zone | reverse .
+toplevel      = macro | include | set | ptr | nameserver | mx | zone | reverse .
 
 macro         = MACRONAME "=" value .
 include       = "include" STRING .
@@ -112,15 +112,17 @@ option        = "email"        EMAIL
               | "serial"       NUMBER
               | "mx-priority"  NUMBER
               | "srv-priority" NUMBER
-              | "srv-weight"   NUMBER
-              | "ptr"          ( "yes" | "no" ) .
+              | "srv-weight"   NUMBER .
+
+ptr           = "ptr" | "no" "ptr" .
 
 nameserver    = "nameserver" name-list [ "ttl" duration ] .
 mx            = "mx" name { mx-opt } .
 mx-opt        = "priority" NUMBER | "ttl" duration .
 
 zone          = "zone" name "{" NL { [ zone-stmt ] NL } "}" .
-zone-stmt     = set | network | nameserver | mx | host | cname | srv .
+zone-stmt     = set | ptr | "no" "mx" | network | nameserver | mx
+              | host | cname | srv .
 
 network       = "network" net-list .
 
@@ -174,7 +176,6 @@ but each only once.
 | `mx-priority`  | `0`      | ✓         | ✓      |           | priority of `mx` without `priority`      |
 | `srv-priority` | `5`      | ✓         | ✓      |           | priority of `srv` without `priority`     |
 | `srv-weight`   | `10`     | ✓         | ✓      |           | weight of `srv` without `weight`         |
-| `ptr`          | `yes`    | ✓         | ✓      |           | whether hosts get PTR records            |
 
 Top-level `set` statements must come before the first `zone` or `reverse`
 block. That way, reading the file from the top shows which defaults are in
@@ -183,11 +184,29 @@ effect. Inside a block, `set` must come before the first record.
 The defaults in the table are the values of `zonefile-rs`
 (`src/constants.rs`) written as durations: 10800 s = `3h`, 1209600 s = `2w`.
 
+`set` is for values. Switching something off is a statement of its own,
+`no …`, as in other OpenBSD configuration files; see `ptr` and `no mx`.
+
+### ptr, no ptr
+
+```
+ptr
+no ptr
+```
+
+Whether hosts get PTR records; by default they do. At top level the
+statement sets the default for all zones, inside a `zone` it overrides it
+for that zone; at both places it follows the same ordering rule as `set`.
+A host can override it again with `ptr` or `no ptr` (see [host](#host)).
+`ptr` and `no ptr` are not allowed in a `reverse` block.
+
 ### nameserver, mx at top level
 
 `nameserver` and `mx` at top level define the default NS and MX records
 for every zone that has none of its own. Once a zone declares at least one
-`nameserver` (or `mx`), the defaults of that type no longer apply to it. A
+`nameserver` (or `mx`), the defaults of that type no longer apply to it.
+A zone that should have no MX records at all, not even the top-level ones,
+says `no mx`; `no mx` and `mx` in the same zone are an error. A
 forward zone without any nameserver is an error. At top level, names must
 be absolute (end in a dot), because there is no zone to resolve them
 against.
@@ -266,7 +285,8 @@ as is. Both can be mixed in a list. `no inet` and `no inet6` drop the
 addresses of that family, so `host printer .12 no inet6` is IPv4 only. `alias` names get the **same
 addresses as additional A/AAAA records**, not CNAMEs, which matches
 `zonefile-rs`. Only the host name itself gets a PTR record; aliases do
-not. `no ptr` and `ptr` override `set ptr` for this host.
+not. `no ptr` and `ptr` override the `ptr` or `no ptr` of the zone for
+this host.
 
 ### cname
 
@@ -368,10 +388,11 @@ zonefile-go [-nV] [-f file] [-o path] [-s serialfile] [-t unbound|nsd]
 | `defaults.nrc-ttl`                 | `set negative-ttl …`                  |
 | `defaults.mx-prio`                 | `set mx-priority …`                   |
 | `defaults.srv-prio` / `srv-weight` | `set srv-priority …` / `set srv-weight …` |
-| `defaults.with-ptr: false`         | `set ptr no`                          |
+| `defaults.with-ptr: false`         | top-level `no ptr`                    |
 | `defaults.nameserver`              | top-level `nameserver …`              |
 | `defaults.mx`                      | top-level `mx …`                      |
 | `zone.<name>`                      | `zone <name> { … }`                   |
+| `zone.<name>.with-ptr: false`      | `no ptr` in the zone                  |
 | `hosts.<h>: ip`                    | `host <h> ip` or `host <h> .suffix`   |
 | `hosts.<h>: {ip, alias, ttl}`      | `host <h> {…} alias {…} ttl …`        |
 | `hosts.<h>.with-ptr: false`        | `host <h> … no ptr`                   |

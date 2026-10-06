@@ -108,7 +108,7 @@ set serial 2026100400
 set mx-priority 10
 set srv-priority 5
 set srv-weight 20
-set ptr no
+no ptr
 
 reverse 10.0.0.0/8 {
 	set ttl 1d
@@ -232,8 +232,28 @@ func TestParseErrors(t *testing.T) {
 			`test.conf:2: srv: "mqtt._tcp" must start with _service._proto`}},
 		{"srv without port", "zone a {\n\tsrv _a._tcp x\n}\n", []string{
 			`test.conf:2: expected "port", got end of line`}},
-		{"reverse option", "reverse 10.0.0.0/8 {\n\tset ptr no\n}\n", []string{
-			`test.conf:2: option "ptr" is not allowed in a reverse block`}},
+		{"reverse option", "reverse 10.0.0.0/8 {\n\tset mx-priority 1\n}\n", []string{
+			`test.conf:2: option "mx-priority" is not allowed in a reverse block`}},
+		{"set ptr", "set ptr no\n", []string{
+			`test.conf:1: "set ptr" is not supported, use "ptr" or "no ptr"`}},
+		{"ptr twice", "ptr\nno ptr\n", []string{
+			`test.conf:2: "ptr" given twice`}},
+		{"ptr after block", "zone a {\n}\nno ptr\n", []string{
+			`test.conf:3: "no ptr" must come before the first zone or reverse block`}},
+		{"no mx at top level", "no mx\n", []string{
+			`test.conf:1: "no mx" is only allowed in a zone`}},
+		{"no what", "zone a {\n\tno cname\n}\n", []string{
+			`test.conf:2: expected "ptr" or "mx" after "no", got "cname"`}},
+		{"zone ptr after record", "zone a {\n\thost x 10.0.0.1\n\tptr\n}\n", []string{
+			`test.conf:3: "ptr" must come before the first record`}},
+		{"no mx after mx", "zone a {\n\tmx m\n\tno mx\n}\n", []string{
+			`test.conf:3: "no mx" conflicts with the mx record at test.conf:2`}},
+		{"mx after no mx", "zone a {\n\tno mx\n\tmx m\n}\n", []string{
+			`test.conf:3: mx conflicts with "no mx" in this zone`}},
+		{"no mx twice", "zone a {\n\tno mx\n\tno mx\n}\n", []string{
+			`test.conf:3: "no mx" given twice`}},
+		{"no ptr in reverse", "reverse 10.0.0.0/8 {\n\tno ptr\n}\n", []string{
+			`test.conf:2: unknown statement "no" in reverse block`}},
 		{"missing brace", "zone a {\n\thost x 10.0.0.1\n", []string{
 			`test.conf:1: zone "a": missing "}"`}},
 		{"brace on next line", "zone a\n{\n}\n", []string{
@@ -258,5 +278,32 @@ func TestParseErrors(t *testing.T) {
 				t.Errorf("got\n  %s\nwant\n  %s", strings.Join(got, "\n  "), strings.Join(tt.want, "\n  "))
 			}
 		})
+	}
+}
+
+func TestParsePTRAndNoMX(t *testing.T) {
+	cfg := mustParse(t, `
+no ptr
+zone a.example {
+	ptr
+	no mx
+	host x 10.0.0.1 no ptr
+}
+zone b.example {
+	host y 10.0.0.2
+}
+`)
+	if cfg.Options.PTR == nil || *cfg.Options.PTR {
+		t.Errorf("global PTR = %v, want false", cfg.Options.PTR)
+	}
+	a, b := cfg.Zones[0], cfg.Zones[1]
+	if a.Options.PTR == nil || !*a.Options.PTR || !a.NoMX {
+		t.Errorf("zone a: PTR = %v, NoMX = %v", a.Options.PTR, a.NoMX)
+	}
+	if b.Options.PTR != nil || b.NoMX {
+		t.Errorf("zone b: PTR = %v, NoMX = %v", b.Options.PTR, b.NoMX)
+	}
+	if h := a.Hosts[0]; h.PTR == nil || *h.PTR {
+		t.Errorf("host x PTR = %v, want false", h.PTR)
 	}
 }

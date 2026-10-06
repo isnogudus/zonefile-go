@@ -104,6 +104,13 @@ func TestResolveExample(t *testing.T) {
 		t.Errorf("wildcard alias = %v", got)
 	}
 
+	if len(apps.MX) != 0 || len(find(zones, "internal.example.com.").MX) != 0 {
+		t.Errorf("zones with no mx got MX records: %+v", apps.MX)
+	}
+	if mx := find(zones, "iot.example.com.").MX; len(mx) != 1 || mx[0].Name != "mail.example.com." || mx[0].Priority != 10 {
+		t.Errorf("iot inherits the top-level mx: %+v", mx)
+	}
+
 	cl := find(zones, "cluster.example.com.")
 	if got := addrsOf(cl, "mailserver.cluster.example.com."); !reflect.DeepEqual(got, []string{"192.168.93.67", "fd00:1234:5678:2000::43"}) {
 		t.Errorf("mailserver = %v", got)
@@ -111,7 +118,7 @@ func TestResolveExample(t *testing.T) {
 
 	v4 := find(zones, "168.192.in-addr.arpa.")
 	for addr, target := range map[string]string{
-		"192.168.21.37":  "homeassistant.example.com.", // apps has set ptr no
+		"192.168.21.37":  "homeassistant.example.com.", // apps has no ptr
 		"192.168.21.1":   "router.example.com.",
 		"192.168.21.5":   "docker.example.com.",
 		"192.168.93.67":  "mailserver.cluster.example.com.",
@@ -298,6 +305,35 @@ func TestResolveErrors(t *testing.T) {
 				t.Errorf("got\n  %s\nwant\n  %s", strings.Join(got, "\n  "), strings.Join(tt.want, "\n  "))
 			}
 		})
+	}
+}
+
+func TestResolvePTRInheritance(t *testing.T) {
+	zones := mustResolve(t, `
+set email admin@example.com
+nameserver ns1.example.com.
+mx mail.example.com.
+no ptr
+reverse 10.0.0.0/8
+zone a.example {
+	host x 10.0.0.1
+	host y 10.0.0.2 ptr
+}
+zone b.example {
+	ptr
+	no mx
+	host z 10.0.0.3
+}
+`)
+	var targets []string
+	for _, p := range zones[2].PTRs {
+		targets = append(targets, p.Target)
+	}
+	if want := []string{"y.a.example.", "z.b.example."}; !reflect.DeepEqual(targets, want) {
+		t.Errorf("PTR targets = %v, want %v", targets, want)
+	}
+	if len(zones[0].MX) != 1 || len(zones[1].MX) != 0 {
+		t.Errorf("MX: a = %+v, b = %+v", zones[0].MX, zones[1].MX)
 	}
 }
 

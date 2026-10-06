@@ -38,7 +38,8 @@ type Options struct {
 	MXPriority  *uint16
 	SRVPriority *uint16
 	SRVWeight   *uint16
-	PTR         *bool
+	// PTR is set by the ptr and no ptr statements.
+	PTR *bool
 }
 
 type Nameserver struct {
@@ -61,9 +62,12 @@ type Zone struct {
 	Networks    []netip.Prefix
 	Nameservers []Nameserver
 	MX          []MX
-	Hosts       []Host
-	CNAMEs      []CNAME
-	SRVs        []SRV
+	// NoMX is set by no mx: the zone has no MX records, not even the
+	// top-level ones.
+	NoMX   bool
+	Hosts  []Host
+	CNAMEs []CNAME
+	SRVs   []SRV
 }
 
 // HostAddr is either a full address or, if Suffix is not nil, an address

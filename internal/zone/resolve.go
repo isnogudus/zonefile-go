@@ -192,7 +192,7 @@ func (r *resolver) forward(cz *config.Zone, global settings) (*Zone, []ptrCandid
 	z.NS = r.nameservers(cz.Pos, name, cz.Nameservers, s.ttl)
 
 	mxs := cz.MX
-	if len(mxs) == 0 {
+	if len(mxs) == 0 && !cz.NoMX {
 		mxs = r.cfg.MX
 	}
 	for _, m := range mxs {

@@ -79,6 +79,12 @@ func (p *parser) topLevel() bool {
 			return false
 		}
 		return p.set(&p.cfg.Options, scopeGlobal)
+	case "ptr", "no":
+		if p.seenBlock {
+			p.Errorf(t.Pos, "%s must come before the first zone or reverse block", statementName(p))
+			return false
+		}
+		return p.ptrStatement(&p.cfg.Options, nil)
 	case "nameserver":
 		ns, ok := p.nameserver(true)
 		p.cfg.Nameservers = append(p.cfg.Nameservers, ns...)
@@ -107,6 +113,45 @@ func once[T any](p *parser, kw obsdconf.Token, dst **T, v T) bool {
 	return true
 }
 
+// statementName names the ptr or no statement at the current token for
+// messages, e.g. "no ptr".
+func statementName(p *parser) string {
+	if p.Tok().Text == "ptr" {
+		return `"ptr"`
+	}
+	return fmt.Sprintf(`"no %s"`, p.Peek(1).Text)
+}
+
+// ptrStatement parses "ptr" or "no ptr" into o.PTR. If mx is not nil,
+// "no mx" is accepted as well and sets *mx.
+func (p *parser) ptrStatement(o *Options, mx *bool) bool {
+	kw := p.Tok()
+	if p.Accept("ptr") {
+		return once(p, kw, &o.PTR, true)
+	}
+	p.Next() // "no"
+	t := p.Tok()
+	what := `"ptr" after "no"`
+	if mx != nil {
+		what = `"ptr" or "mx" after "no"`
+	}
+	switch {
+	case p.Accept("ptr"):
+		return once(p, t, &o.PTR, false)
+	case mx != nil && p.Accept("mx"):
+		if *mx {
+			p.Errorf(t.Pos, `"no mx" given twice`)
+			return false
+		}
+		*mx = true
+		return true
+	case t.Kind == obsdconf.Word && t.Text == "mx":
+		p.Errorf(t.Pos, `"no mx" is only allowed in a zone`)
+		return false
+	}
+	return p.Expected(what)
+}
+
 func (p *parser) set(o *Options, sc scope) bool {
 	p.Next()
 	t := p.Tok()
@@ -114,7 +159,10 @@ func (p *parser) set(o *Options, sc scope) bool {
 		return p.Expected("option name")
 	}
 	switch t.Text {
-	case "mx-priority", "srv-priority", "srv-weight", "ptr":
+	case "ptr":
+		p.Errorf(t.Pos, `"set ptr" is not supported, use "ptr" or "no ptr"`)
+		return false
+	case "mx-priority", "srv-priority", "srv-weight":
 		if sc == scopeReverse {
 			p.Errorf(t.Pos, "option %q is not allowed in a reverse block", t.Text)
 			return false
@@ -144,9 +192,6 @@ func (p *parser) set(o *Options, sc scope) bool {
 		return p.u16Value(t, &o.SRVPriority)
 	case "srv-weight":
 		return p.u16Value(t, &o.SRVWeight)
-	case "ptr":
-		v, ok := p.Bool()
-		return ok && once(p, t, &o.PTR, v)
 	}
 	p.Errorf(t.Pos, "unknown option %q", t.Text)
 	return false
@@ -373,6 +418,17 @@ func (p *parser) zoneStmt(z *Zone, st *blockState) bool {
 			return false
 		}
 		return p.set(&z.Options, scopeZone)
+	case "ptr", "no":
+		isMX := t.Text == "no" && p.Is("no", "mx")
+		if st.records && !isMX {
+			p.Errorf(t.Pos, "%s must come before the first record", statementName(p))
+			return false
+		}
+		if isMX && len(z.MX) > 0 {
+			p.Errorf(t.Pos, `"no mx" conflicts with the mx record at %s`, z.MX[0].Pos)
+			return false
+		}
+		return p.ptrStatement(&z.Options, &z.NoMX)
 	case "network":
 		if st.hosts {
 			p.Errorf(t.Pos, "network must come before the first host")
@@ -386,6 +442,10 @@ func (p *parser) zoneStmt(z *Zone, st *blockState) bool {
 		return ok
 	case "mx":
 		st.records = true
+		if z.NoMX {
+			p.Errorf(t.Pos, `mx conflicts with "no mx" in this zone`)
+			return false
+		}
 		mx, ok := p.mx(false)
 		z.MX = append(z.MX, mx)
 		return ok
