@@ -1,4 +1,4 @@
-.Dd October 5, 2026
+.Dd October 6, 2026
 .Dt ZONEFILE.CONF 5
 .Os
 .Sh NAME
@@ -11,7 +11,7 @@ which
 .Xr zonefile-go 8
 generates reverse zones.
 .Pp
-The file has these sections, in this order:
+The file usually has these sections, in this order:
 .Bl -tag -width xxxx
 .It Sy Macros
 User-defined variables that may be used later in the file.
@@ -25,8 +25,12 @@ The forward zones with their hosts, aliases and records.
 .Pp
 Macros may be defined and
 .Ic include
-may be used anywhere at top level.
-Global settings must come before the first
+may be used anywhere at top level, and
+.Ic zone
+and
+.Ic reverse
+blocks may follow each other in any order.
+Only the global settings must come before the first
 .Ic zone
 or
 .Ic reverse
@@ -254,12 +258,21 @@ An SRV record.
 The default priority is 5, the default weight 10.
 .El
 .Pp
+Records can only be created within the zone: a host, alias,
+.Ic cname
+or
+.Ic srv
+with an absolute name outside it is an error.
+Targets, such as that of a
+.Ic cname ,
+may lie anywhere.
+.Pp
 Within a zone, a host must not be declared twice, and the same name with
 the same address must not result twice.
 Two hosts producing a PTR record for the same address in a reverse zone is
 an error as well.
 .Sh FILES
-.Bl -tag -width "/usr/local/share/examples/zonefile-go/zonefile.conf" -compact
+.Bl -tag -width Ds
 .It Pa /etc/zonefile.conf
 Default configuration file.
 .It Pa /usr/local/share/examples/zonefile-go/zonefile.conf

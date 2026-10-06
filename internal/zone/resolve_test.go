@@ -284,6 +284,16 @@ func TestResolveErrors(t *testing.T) {
 			`test.conf:5: cname www.a.example. conflicts with other records for that name at test.conf:4`}},
 		{"cname at apex", head + "zone a.example {\n\tcname @ other\n}\n", []string{
 			`test.conf:4: cname a.example. conflicts with other records for that name at test.conf:3`}},
+		{"alias outside zone", head + "zone home.arpa {\n\thost mail 192.168.21.6 alias mail.h.example.net.\n}\n", []string{
+			`test.conf:4: alias mail.h.example.net. is outside zone home.arpa.`}},
+		{"host outside zone", head + "zone a.example {\n\thost x.b.example. 10.0.0.1\n}\n", []string{
+			`test.conf:4: host x.b.example. is outside zone a.example.`}},
+		{"cname outside zone", head + "zone a.example {\n\tcname www.b.example. a.example.\n}\n", []string{
+			`test.conf:4: cname www.b.example. is outside zone a.example.`}},
+		{"srv outside zone", head + "zone a.example {\n\tsrv _x._tcp.b.example. a.example. port 1\n}\n", []string{
+			`test.conf:4: srv _x._tcp.b.example. is outside zone a.example.`}},
+		{"suffix of zone is not inside", head + "zone a.example {\n\thost x.ba.example. 10.0.0.1\n}\n", []string{
+			`test.conf:4: host x.ba.example. is outside zone a.example.`}},
 		{"bad label", head + "zone a.example {\n\thost -x 10.0.0.1\n}\n", []string{
 			`test.conf:4: label "-x" in "-x.a.example." starts or ends with a hyphen`}},
 		{"unaligned reverse", head + "reverse 10.0.0.0/20\n", []string{
@@ -376,6 +386,23 @@ func TestLooksAbsolute(t *testing.T) {
 		if got := looksAbsolute(tt.name, tt.origin); got != tt.want {
 			t.Errorf("looksAbsolute(%q, %q) = %q, want %q", tt.name, tt.origin, got, tt.want)
 		}
+	}
+}
+
+func TestResolveAbsoluteNamesInZone(t *testing.T) {
+	// Absolute owner names inside the zone, in any case, and targets
+	// outside it are fine.
+	zones := mustResolve(t, `
+email admin@example.com
+nameserver ns1.example.com.
+zone a.example {
+	host x.A.Example. 10.0.0.1 alias { a.example. sub.x.a.example. }
+	cname mail mail.home.arpa.
+	srv _x._tcp.a.example. other.example.net. port 1
+}
+`)
+	if n := len(zones[0].Addresses); n != 3 {
+		t.Errorf("got %d address records, want 3", n)
 	}
 }
 

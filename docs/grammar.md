@@ -362,6 +362,10 @@ New checks, which `zonefile-rs` does not enforce:
   alias with *different* addresses (round robin).
 - **CNAMEs:** a CNAME must not share its name with any other record,
   including the zone apex.
+- **Out-of-zone data:** hosts, aliases, CNAMEs and SRV records must have
+  names within their zone, e.g. `alias mail.h.example.net.` in `zone
+  home.arpa` is an error. NSD would reject such a zone file. Targets may
+  lie anywhere.
 
 Warnings do not stop the zones from being written. There is one: a
 relative name that looks like a full one, because it repeats the zone name

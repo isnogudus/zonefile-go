@@ -91,6 +91,22 @@ func (r *resolver) name(pos config.Pos, name, origin string) (string, bool) {
 	return abs, true
 }
 
+// owner is name for the owner of a record: besides the checks of name, it
+// must lie within the zone, or the zone file would hold out-of-zone data.
+// what names the statement for the error message.
+func (r *resolver) owner(pos config.Pos, what, name, origin string) (string, bool) {
+	abs, ok := r.name(pos, name, origin)
+	if !ok {
+		return "", false
+	}
+	lower, zone := strings.ToLower(abs), strings.ToLower(origin)
+	if lower != zone && !strings.HasSuffix(lower, "."+zone) {
+		r.errorf(pos, "%s %s is outside zone %s", what, abs, origin)
+		return "", false
+	}
+	return abs, true
+}
+
 // Resolve builds the forward zones of cfg, in configuration order,
 // followed by its reverse zones. It also returns warnings, which do not
 // stop the zones from being built. On failure the error is a
@@ -264,7 +280,7 @@ func (r *resolver) hostAddrs(cz *config.Zone, h config.Host) ([]netip.Addr, bool
 }
 
 func (r *resolver) host(z *Zone, cz *config.Zone, h config.Host, s settings, own *owners) []ptrCandidate {
-	name, ok := r.name(h.Pos, h.Name, z.Name)
+	name, ok := r.owner(h.Pos, "host", h.Name, z.Name)
 	if !ok {
 		return nil
 	}
@@ -277,7 +293,7 @@ func (r *resolver) host(z *Zone, cz *config.Zone, h config.Host, s settings, own
 
 	var aliases []string
 	for _, a := range h.Aliases {
-		if alias, ok := r.name(h.Pos, a, z.Name); ok {
+		if alias, ok := r.owner(h.Pos, "alias", a, z.Name); ok {
 			aliases = append(aliases, alias)
 		}
 	}
@@ -314,7 +330,7 @@ func (r *resolver) host(z *Zone, cz *config.Zone, h config.Host, s settings, own
 }
 
 func (r *resolver) cname(z *Zone, c config.CNAME, s settings, own *owners) {
-	name, ok1 := r.name(c.Pos, c.Name, z.Name)
+	name, ok1 := r.owner(c.Pos, "cname", c.Name, z.Name)
 	target, ok2 := r.name(c.Pos, c.Target, z.Name)
 	if !ok1 || !ok2 {
 		return
@@ -335,7 +351,7 @@ func (r *resolver) cname(z *Zone, c config.CNAME, s settings, own *owners) {
 }
 
 func (r *resolver) srv(z *Zone, sv config.SRV, s settings, own *owners) {
-	name, ok1 := r.name(sv.Pos, sv.Name, z.Name)
+	name, ok1 := r.owner(sv.Pos, "srv", sv.Name, z.Name)
 	target, ok2 := r.name(sv.Pos, sv.Target, z.Name)
 	if !ok1 || !ok2 {
 		return

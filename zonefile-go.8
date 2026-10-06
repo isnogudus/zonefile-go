@@ -1,4 +1,4 @@
-.Dd October 5, 2026
+.Dd October 6, 2026
 .Dt ZONEFILE-GO 8
 .Os
 .Sh NAME
@@ -191,4 +191,5 @@ here.
 .Nm
 succeeds zonefile, written in Python, and zonefile-rs, written in Rust,
 which read YAML or TOML.
-For the same zones it writes the same records.
+For the same zones it writes the same records, except that it rejects
+duplicate records instead of writing them twice.
