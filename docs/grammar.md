@@ -16,8 +16,8 @@ mail = "mail.example.com."
 lan  = "{ 192.168.21.0/24 fd00:1234:5678:1000::/64 }"
 
 # Global options
-set email admin@example.com
-set ttl 3h
+email admin@example.com
+ttl 3h
 
 nameserver $ns1
 
@@ -97,22 +97,19 @@ EBNF. Terminals are quoted. `NL` is a newline that ends a statement.
 
 ```
 config        = { [ toplevel ] NL } .
-toplevel      = macro | include | set | ptr | nameserver | mx | zone | reverse .
+toplevel      = macro | include | setting | ptr | nameserver | mx | zone
+              | reverse .
 
 macro         = MACRONAME "=" value .
 include       = "include" STRING .
 
-set           = "set" option .
-option        = "email"        EMAIL
+setting       = "email"        EMAIL
               | "ttl"          duration
               | "refresh"      duration
               | "retry"        duration
               | "expire"       duration
               | "negative-ttl" duration
-              | "serial"       NUMBER
-              | "mx-priority"  NUMBER
-              | "srv-priority" NUMBER
-              | "srv-weight"   NUMBER .
+              | "serial"       NUMBER .
 
 ptr           = "ptr" | "no" "ptr" .
 
@@ -121,7 +118,7 @@ mx            = "mx" name { mx-opt } .
 mx-opt        = "priority" NUMBER | "ttl" duration .
 
 zone          = "zone" name "{" NL { [ zone-stmt ] NL } "}" .
-zone-stmt     = set | ptr | "no" "mx" | network | nameserver | mx
+zone-stmt     = setting | ptr | "no" "mx" | network | nameserver | mx
               | host | cname | srv .
 
 network       = "network" net-list .
@@ -142,7 +139,7 @@ srv           = "srv" SRVNAME name "port" NUMBER { srv-opt } .
 srv-opt       = "priority" NUMBER | "weight" NUMBER | "ttl" duration .
 
 reverse       = "reverse" net-list [ "{" NL { [ reverse-stmt ] NL } "}" ] .
-reverse-stmt  = set | nameserver .
+reverse-stmt  = setting | nameserver .
 
 addr-list     = ADDRESS | "{" ADDRESS { [ "," ] ADDRESS } "}" .
 name-list     = name    | "{" name    { [ "," ] name    } "}" .
@@ -160,32 +157,36 @@ but each only once.
 
 ## Statements
 
-### set
+### Settings
 
-`set` changes a default for everything that follows in the same scope.
+A setting gives a value of the zone: the SOA contact, the default TTL and
+the other SOA values. At top level it is the default for all zones; inside
+a `zone` or `reverse` block it overrides that default for the block.
 
-| Option         | Default  | Top level | `zone` | `reverse` | Meaning                                  |
-|----------------|----------|:---------:|:------:|:---------:|------------------------------------------|
-| `email`        | —        | ✓         | ✓      | ✓         | SOA contact (`RNAME`); required          |
-| `ttl`          | `3h`     | ✓         | ✓      | ✓         | default TTL of the zone and its records  |
-| `refresh`      | `2h`     | ✓         | ✓      | ✓         | SOA refresh                              |
-| `retry`        | `1h`     | ✓         | ✓      | ✓         | SOA retry, must be less than `refresh`   |
-| `expire`       | `2w`     | ✓         | ✓      | ✓         | SOA expire                               |
-| `negative-ttl` | `1h`     | ✓         | ✓      | ✓         | SOA minimum (negative caching TTL)       |
-| `serial`       | computed | ✓         | ✓      | ✓         | fixed serial instead of `YYYYMMDDnn`     |
-| `mx-priority`  | `0`      | ✓         | ✓      |           | priority of `mx` without `priority`      |
-| `srv-priority` | `5`      | ✓         | ✓      |           | priority of `srv` without `priority`     |
-| `srv-weight`   | `10`     | ✓         | ✓      |           | weight of `srv` without `weight`         |
+| Setting        | Default  | Meaning                                  |
+|----------------|----------|------------------------------------------|
+| `email`        | —        | SOA contact (`RNAME`); required          |
+| `ttl`          | `3h`     | default TTL of the zone and its records  |
+| `refresh`      | `2h`     | SOA refresh                              |
+| `retry`        | `1h`     | SOA retry, must be less than `refresh`   |
+| `expire`       | `2w`     | SOA expire                               |
+| `negative-ttl` | `1h`     | SOA minimum (negative caching TTL)       |
+| `serial`       | computed | fixed serial instead of `YYYYMMDDnn`     |
 
-Top-level `set` statements must come before the first `zone` or `reverse`
+Settings at top level must come before the first `zone` or `reverse`
 block. That way, reading the file from the top shows which defaults are in
-effect. Inside a block, `set` must come before the first record.
+effect. Inside a block, settings must come before the first record. Each
+setting may be given once per scope.
 
 The defaults in the table are the values of `zonefile-rs`
 (`src/constants.rs`) written as durations: 10800 s = `3h`, 1209600 s = `2w`.
 
-`set` is for values. Switching something off is a statement of its own,
-`no …`, as in other OpenBSD configuration files; see `ptr` and `no mx`.
+There is no `set` keyword: as in `httpd.conf(5)`, every line is a plain
+statement, and the keyword alone tells a setting from a record. Switching
+something off is written `no …`, see `ptr` and `no mx`.
+
+Records without a priority get those of `zonefile-rs`: 0 for `mx`, and
+priority 5 and weight 10 for `srv`.
 
 ### ptr, no ptr
 
@@ -196,9 +197,9 @@ no ptr
 
 Whether hosts get PTR records; by default they do. At top level the
 statement sets the default for all zones, inside a `zone` it overrides it
-for that zone; at both places it follows the same ordering rule as `set`.
-A host can override it again with `ptr` or `no ptr` (see [host](#host)).
-`ptr` and `no ptr` are not allowed in a `reverse` block.
+for that zone; at both places it follows the same ordering rule as the
+settings. A host can override it again with `ptr` or `no ptr` (see
+[host](#host)). `ptr` and `no ptr` are not allowed in a `reverse` block.
 
 ### nameserver, mx at top level
 
@@ -383,11 +384,11 @@ zonefile-go [-nV] [-f file] [-o path] [-s serialfile] [-t unbound|nsd]
 
 | zonefile-rs (YAML/TOML)            | zonefile.conf                         |
 |------------------------------------|---------------------------------------|
-| `defaults.email`                   | `set email …`                         |
-| `defaults.ttl` / `refresh` / …     | `set ttl …` / `set refresh …` / …     |
-| `defaults.nrc-ttl`                 | `set negative-ttl …`                  |
-| `defaults.mx-prio`                 | `set mx-priority …`                   |
-| `defaults.srv-prio` / `srv-weight` | `set srv-priority …` / `set srv-weight …` |
+| `defaults.email`                   | `email …`                             |
+| `defaults.ttl` / `refresh` / …     | `ttl …` / `refresh …` / …             |
+| `defaults.nrc-ttl`                 | `negative-ttl …`                      |
+| `defaults.mx-prio`                 | `priority …` on each `mx`             |
+| `defaults.srv-prio` / `srv-weight` | `priority …` / `weight …` on each `srv` |
 | `defaults.with-ptr: false`         | top-level `no ptr`                    |
 | `defaults.nameserver`              | top-level `nameserver …`              |
 | `defaults.mx`                      | top-level `mx …`                      |
@@ -399,7 +400,7 @@ zonefile-go [-nV] [-f file] [-o path] [-s serialfile] [-t unbound|nsd]
 | `cname.<n>: target`                | `cname <n> target`                    |
 | `srv.<s>: {target, port, …}`       | `srv <s> target port … priority …`    |
 | `reverse: [nets]`                  | `reverse { nets }`                    |
-| `reverse.<net>: {options}`         | `reverse <net> { set … }`             |
+| `reverse.<net>: {options}`         | `reverse <net> { ttl … }`             |
 
 ## Open questions
 

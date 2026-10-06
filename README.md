@@ -20,7 +20,7 @@ zonefile-rs except for these intended differences:
 ## Example
 
 ```
-set email admin@example.com
+email admin@example.com
 nameserver ns1.example.com.
 
 reverse 192.168.1.0/24
@@ -57,7 +57,7 @@ are considered, so zone files maintained by hand in the same directory are
 left alone.
 
 The SOA serial is `YYYYMMDDnn` (UTC date, counting up within a day) unless
-a zone sets `set serial`. The last serial is kept in the serial file, which
+a zone sets `serial`. The last serial is kept in the serial file, which
 is only updated after the output has been written.
 
 ## Building

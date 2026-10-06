@@ -162,18 +162,17 @@ func slicesSorted(ptrs []PTR) bool {
 
 func TestResolveDefaults(t *testing.T) {
 	zones := mustResolve(t, `
-set email john.doe@example.com
-set ttl 1h
+email john.doe@example.com
+ttl 1h
 nameserver ns1.example.com.
 mx mail.example.com.
 
 reverse 10.0.0.0/24 {
-	set ttl 1d
+	ttl 1d
 }
 
 zone example.com {
-	set mx-priority 5
-	set serial 7
+	serial 7
 	host a 10.0.0.1 ttl 5m
 	host b 10.0.0.2 no ptr
 	srv _x._tcp a port 1 weight 3
@@ -184,7 +183,7 @@ zone example.com {
 		z.SOA.Refresh != DefaultRefresh || z.SOA.Minimum != DefaultNegativeTTL {
 		t.Errorf("zone = %+v, soa = %+v", z, z.SOA)
 	}
-	if want := []MX{{Name: "mail.example.com.", Priority: 5, TTL: 3600}}; !reflect.DeepEqual(z.MX, want) {
+	if want := []MX{{Name: "mail.example.com.", Priority: DefaultMXPriority, TTL: 3600}}; !reflect.DeepEqual(z.MX, want) {
 		t.Errorf("mx = %+v", z.MX)
 	}
 	if want := []NS{{Name: "ns1.example.com.", TTL: 3600}}; !reflect.DeepEqual(z.NS, want) {
@@ -253,17 +252,17 @@ func TestValidName(t *testing.T) {
 }
 
 func TestResolveErrors(t *testing.T) {
-	const head = "set email admin@example.com\nnameserver ns1.example.com.\n"
+	const head = "email admin@example.com\nnameserver ns1.example.com.\n"
 	tests := []struct {
 		name string
 		src  string
 		want []string
 	}{
 		{"no email", "nameserver ns.example.com.\nzone a.example {\n}\n", []string{
-			`test.conf:2: zone a.example. has no e-mail address, add "set email"`}},
-		{"no nameserver", "set email a@example.com\nzone a.example {\n}\n", []string{
+			`test.conf:2: zone a.example. has no e-mail address, add "email"`}},
+		{"no nameserver", "email a@example.com\nzone a.example {\n}\n", []string{
 			`test.conf:2: zone a.example. has no nameserver`}},
-		{"retry", head + "zone a.example {\n\tset retry 3h\n}\n", []string{
+		{"retry", head + "zone a.example {\n\tretry 3h\n}\n", []string{
 			`test.conf:3: zone a.example.: retry (10800) must be less than refresh (7200)`}},
 		{"duplicate zone", head + "zone a.example {\n}\nzone A.example. {\n}\n", []string{
 			`test.conf:5: zone A.example. already declared at test.conf:3`}},
@@ -310,7 +309,7 @@ func TestResolveErrors(t *testing.T) {
 
 func TestResolvePTRInheritance(t *testing.T) {
 	zones := mustResolve(t, `
-set email admin@example.com
+email admin@example.com
 nameserver ns1.example.com.
 mx mail.example.com.
 no ptr
@@ -340,7 +339,7 @@ zone b.example {
 func TestResolvePTROutsideReverse(t *testing.T) {
 	// The same address in two zones is fine if no reverse network covers it.
 	mustResolve(t, `
-set email admin@example.com
+email admin@example.com
 nameserver ns1.example.com.
 zone a.example {
 	host x 203.0.113.1

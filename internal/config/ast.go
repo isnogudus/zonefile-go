@@ -25,8 +25,8 @@ type Config struct {
 	Reverse     []*Reverse
 }
 
-// Options holds the values of the set statements of one scope. A nil field
-// was not set in that scope.
+// Options holds the settings of one scope: email, ttl and the other SOA
+// values, and ptr or no ptr. A nil field was not set in that scope.
 type Options struct {
 	Email       *string
 	TTL         *uint32
@@ -35,11 +35,7 @@ type Options struct {
 	Expire      *uint32
 	NegativeTTL *uint32
 	Serial      *uint32
-	MXPriority  *uint16
-	SRVPriority *uint16
-	SRVWeight   *uint16
-	// PTR is set by the ptr and no ptr statements.
-	PTR *bool
+	PTR         *bool
 }
 
 type Nameserver struct {

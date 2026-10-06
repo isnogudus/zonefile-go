@@ -98,20 +98,17 @@ zone example.com {
 
 func TestParseOptions(t *testing.T) {
 	cfg := mustParse(t, `
-set email "hostmaster@example.com"
-set ttl 3h
-set refresh 2h
-set retry 3600
-set expire 2w
-set negative-ttl 0
-set serial 2026100400
-set mx-priority 10
-set srv-priority 5
-set srv-weight 20
+email "hostmaster@example.com"
+ttl 3h
+refresh 2h
+retry 3600
+expire 2w
+negative-ttl 0
+serial 2026100400
 no ptr
 
 reverse 10.0.0.0/8 {
-	set ttl 1d
+	ttl 1d
 	nameserver { ns1.example.com. ns2.example.com. } ttl 5m
 }
 `)
@@ -123,9 +120,6 @@ reverse 10.0.0.0/8 {
 		Expire:      ptr(uint32(1209600)),
 		NegativeTTL: ptr(uint32(0)),
 		Serial:      ptr(uint32(2026100400)),
-		MXPriority:  ptr(uint16(10)),
-		SRVPriority: ptr(uint16(5)),
-		SRVWeight:   ptr(uint16(20)),
 		PTR:         ptr(false),
 	}
 	if !reflect.DeepEqual(cfg.Options, want) {
@@ -170,7 +164,7 @@ func TestParseInclude(t *testing.T) {
 		}
 	}
 	write("main.conf", "include \"common.conf\"\nzone example.com {\n\thost a $addr\n}\n")
-	write("common.conf", "set email admin@example.com\naddr = 192.0.2.1") // no final newline
+	write("common.conf", "email admin@example.com\naddr = 192.0.2.1") // no final newline
 
 	cfg, err := ParseFile(filepath.Join(dir, "main.conf"))
 	if err != nil {
@@ -198,19 +192,27 @@ func TestParseErrors(t *testing.T) {
 	}{
 		{"unknown statement", "frobnicate\n", []string{
 			`test.conf:1: unknown statement "frobnicate"`}},
-		{"unknown option", "set tll 3h\n", []string{
-			`test.conf:1: unknown option "tll"`}},
-		{"option twice", "set ttl 1h\nset ttl 2h\n", []string{
+		{"unknown option", "tll 3h\n", []string{
+			`test.conf:1: unknown statement "tll"`}},
+		{"option twice", "ttl 1h\nttl 2h\n", []string{
 			`test.conf:2: "ttl" given twice`}},
-		{"ttl zero", "set ttl 0\n", []string{
+		{"ttl zero", "ttl 0\n", []string{
 			`test.conf:1: duration "0" out of range (1s-2147483647s)`}},
-		{"sub-second ttl", "set ttl 1500ms\n", []string{
+		{"sub-second ttl", "ttl 1500ms\n", []string{
 			`test.conf:1: duration "1500ms" must be whole seconds`}},
-		{"set after block", "zone a {\n}\nset ttl 1h\n", []string{
-			`test.conf:3: set must come before the first zone or reverse block`}},
-		{"email without at", "set email admin.example.com\n", []string{
+		{"setting after block", "zone a {\n}\nttl 1h\n", []string{
+			`test.conf:3: "ttl" must come before the first zone or reverse block`}},
+		{"zone setting after record", "zone a {\n\thost x 10.0.0.1\n\tttl 1h\n}\n", []string{
+			`test.conf:3: "ttl" must come before the first record`}},
+		{"set", "set ttl 3h\n", []string{
+			`test.conf:1: "set" is not supported, write "ttl ..." without it`}},
+		{"mx-priority", "mx-priority 10\n", []string{
+			`test.conf:1: "mx-priority" is not supported, give the priority on each mx`}},
+		{"srv-weight", "zone a {\n\tsrv-weight 1\n}\n", []string{
+			`test.conf:2: "srv-weight" is not supported, give priority and weight on each srv`}},
+		{"email without at", "email admin.example.com\n", []string{
 			`test.conf:1: invalid e-mail address "admin.example.com": missing "@"`}},
-		{"email numeric tld", "set email a@example.123\n", []string{
+		{"email numeric tld", "email a@example.123\n", []string{
 			`test.conf:1: invalid e-mail address "a@example.123": top-level domain is all digits`}},
 		{"undefined macro", "nameserver $ns\n", []string{
 			`test.conf:1: undefined macro "$ns"`}},
@@ -232,10 +234,8 @@ func TestParseErrors(t *testing.T) {
 			`test.conf:2: srv: "mqtt._tcp" must start with _service._proto`}},
 		{"srv without port", "zone a {\n\tsrv _a._tcp x\n}\n", []string{
 			`test.conf:2: expected "port", got end of line`}},
-		{"reverse option", "reverse 10.0.0.0/8 {\n\tset mx-priority 1\n}\n", []string{
-			`test.conf:2: option "mx-priority" is not allowed in a reverse block`}},
-		{"set ptr", "set ptr no\n", []string{
-			`test.conf:1: "set ptr" is not supported, use "ptr" or "no ptr"`}},
+		{"ptr in reverse", "reverse 10.0.0.0/8 {\n\tptr\n}\n", []string{
+			`test.conf:2: "ptr" is not allowed in a reverse block`}},
 		{"ptr twice", "ptr\nno ptr\n", []string{
 			`test.conf:2: "ptr" given twice`}},
 		{"ptr after block", "zone a {\n}\nno ptr\n", []string{
@@ -253,7 +253,7 @@ func TestParseErrors(t *testing.T) {
 		{"no mx twice", "zone a {\n\tno mx\n\tno mx\n}\n", []string{
 			`test.conf:3: "no mx" given twice`}},
 		{"no ptr in reverse", "reverse 10.0.0.0/8 {\n\tno ptr\n}\n", []string{
-			`test.conf:2: unknown statement "no" in reverse block`}},
+			`test.conf:2: "no ptr" is not allowed in a reverse block`}},
 		{"missing brace", "zone a {\n\thost x 10.0.0.1\n", []string{
 			`test.conf:1: zone "a": missing "}"`}},
 		{"brace on next line", "zone a\n{\n}\n", []string{

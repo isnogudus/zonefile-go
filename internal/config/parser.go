@@ -21,14 +21,6 @@ var keywords = []string{
 	"retry", "reverse", "serial", "set", "srv", "ttl", "weight", "yes", "zone",
 }
 
-type scope int
-
-const (
-	scopeGlobal scope = iota
-	scopeZone
-	scopeReverse
-)
-
 // blockState tracks statement order inside a zone or reverse block.
 type blockState struct {
 	records bool
@@ -72,19 +64,14 @@ func parse(op *obsdconf.Parser) (*Config, error) {
 
 func (p *parser) topLevel() bool {
 	t := p.Tok()
+	if p.isSetting() {
+		if p.seenBlock {
+			p.Errorf(t.Pos, "%s must come before the first zone or reverse block", p.settingName())
+			return false
+		}
+		return p.setting(&p.cfg.Options, true, nil)
+	}
 	switch t.Text {
-	case "set":
-		if p.seenBlock {
-			p.Errorf(t.Pos, "set must come before the first zone or reverse block")
-			return false
-		}
-		return p.set(&p.cfg.Options, scopeGlobal)
-	case "ptr", "no":
-		if p.seenBlock {
-			p.Errorf(t.Pos, "%s must come before the first zone or reverse block", statementName(p))
-			return false
-		}
-		return p.ptrStatement(&p.cfg.Options, nil)
 	case "nameserver":
 		ns, ok := p.nameserver(true)
 		p.cfg.Nameservers = append(p.cfg.Nameservers, ns...)
@@ -100,7 +87,27 @@ func (p *parser) topLevel() bool {
 		p.seenBlock = true
 		return p.reverse()
 	}
-	p.Errorf(t.Pos, "unknown statement %q", t.Text)
+	return p.unknown("")
+}
+
+// unknown reports the current statement as unknown, with a hint for the
+// forms that were removed from the language. where is "" or " in zone".
+func (p *parser) unknown(where string) bool {
+	t := p.Tok()
+	switch t.Text {
+	case "set":
+		if next := p.Peek(1); next.Kind == obsdconf.Word {
+			p.Errorf(t.Pos, `"set" is not supported, write %q without it`, next.Text+" ...")
+		} else {
+			p.Errorf(t.Pos, `"set" is not supported`)
+		}
+	case "mx-priority":
+		p.Errorf(t.Pos, `"mx-priority" is not supported, give the priority on each mx`)
+	case "srv-priority", "srv-weight":
+		p.Errorf(t.Pos, "%q is not supported, give priority and weight on each srv", t.Text)
+	default:
+		p.Errorf(t.Pos, "unknown statement %q%s", t.Text, where)
+	}
 	return false
 }
 
@@ -113,61 +120,32 @@ func once[T any](p *parser, kw obsdconf.Token, dst **T, v T) bool {
 	return true
 }
 
-// statementName names the ptr or no statement at the current token for
-// messages, e.g. "no ptr".
-func statementName(p *parser) string {
-	if p.Tok().Text == "ptr" {
-		return `"ptr"`
-	}
-	return fmt.Sprintf(`"no %s"`, p.Peek(1).Text)
+// settingWords are the statements that set a value of a scope.
+var settingWords = map[string]bool{
+	"email": true, "ttl": true, "refresh": true, "retry": true,
+	"expire": true, "negative-ttl": true, "serial": true, "ptr": true,
 }
 
-// ptrStatement parses "ptr" or "no ptr" into o.PTR. If mx is not nil,
-// "no mx" is accepted as well and sets *mx.
-func (p *parser) ptrStatement(o *Options, mx *bool) bool {
-	kw := p.Tok()
-	if p.Accept("ptr") {
-		return once(p, kw, &o.PTR, true)
-	}
-	p.Next() // "no"
-	t := p.Tok()
-	what := `"ptr" after "no"`
-	if mx != nil {
-		what = `"ptr" or "mx" after "no"`
-	}
-	switch {
-	case p.Accept("ptr"):
-		return once(p, t, &o.PTR, false)
-	case mx != nil && p.Accept("mx"):
-		if *mx {
-			p.Errorf(t.Pos, `"no mx" given twice`)
-			return false
-		}
-		*mx = true
-		return true
-	case t.Kind == obsdconf.Word && t.Text == "mx":
-		p.Errorf(t.Pos, `"no mx" is only allowed in a zone`)
-		return false
-	}
-	return p.Expected(what)
+// isSetting reports whether the current statement is a setting: one of
+// settingWords or a "no ..." statement.
+func (p *parser) isSetting() bool {
+	t := p.Tok().Text
+	return settingWords[t] || t == "no"
 }
 
-func (p *parser) set(o *Options, sc scope) bool {
-	p.Next()
+// settingName names the setting at the current token for messages, e.g.
+// "ttl" or "no ptr".
+func (p *parser) settingName() string {
+	if t := p.Tok().Text; t != "no" {
+		return strconv.Quote(t)
+	}
+	return strconv.Quote("no " + p.Peek(1).Text)
+}
+
+// setting parses a setting into o. ptr says whether ptr and no ptr are
+// allowed; if mx is not nil, no mx is accepted and sets *mx.
+func (p *parser) setting(o *Options, ptr bool, mx *bool) bool {
 	t := p.Tok()
-	if t.Kind != obsdconf.Word {
-		return p.Expected("option name")
-	}
-	switch t.Text {
-	case "ptr":
-		p.Errorf(t.Pos, `"set ptr" is not supported, use "ptr" or "no ptr"`)
-		return false
-	case "mx-priority", "srv-priority", "srv-weight":
-		if sc == scopeReverse {
-			p.Errorf(t.Pos, "option %q is not allowed in a reverse block", t.Text)
-			return false
-		}
-	}
 	p.Next()
 	switch t.Text {
 	case "email":
@@ -186,15 +164,36 @@ func (p *parser) set(o *Options, sc scope) bool {
 	case "serial":
 		v, ok := p.Number(0, math.MaxUint32)
 		return ok && once(p, t, &o.Serial, uint32(v))
-	case "mx-priority":
-		return p.u16Value(t, &o.MXPriority)
-	case "srv-priority":
-		return p.u16Value(t, &o.SRVPriority)
-	case "srv-weight":
-		return p.u16Value(t, &o.SRVWeight)
+	case "ptr":
+		if !ptr {
+			p.Errorf(t.Pos, `"ptr" is not allowed in a reverse block`)
+			return false
+		}
+		return once(p, t, &o.PTR, true)
 	}
-	p.Errorf(t.Pos, "unknown option %q", t.Text)
-	return false
+
+	// "no"
+	n := p.Tok()
+	switch {
+	case ptr && p.Accept("ptr"):
+		return once(p, n, &o.PTR, false)
+	case mx != nil && p.Accept("mx"):
+		if *mx {
+			p.Errorf(n.Pos, `"no mx" given twice`)
+			return false
+		}
+		*mx = true
+		return true
+	case n.Kind == obsdconf.Word && n.Text == "mx" && ptr:
+		p.Errorf(n.Pos, `"no mx" is only allowed in a zone`)
+		return false
+	case n.Kind == obsdconf.Word && (n.Text == "ptr" || n.Text == "mx"):
+		p.Errorf(n.Pos, "%q is not allowed in a reverse block", "no "+n.Text)
+		return false
+	case mx != nil:
+		return p.Expected(`"ptr" or "mx" after "no"`)
+	}
+	return p.Expected(`"ptr" after "no"`)
 }
 
 // seconds parses a duration of whole seconds, at least min.
@@ -411,24 +410,19 @@ func (p *parser) zone() bool {
 
 func (p *parser) zoneStmt(z *Zone, st *blockState) bool {
 	t := p.Tok()
-	switch t.Text {
-	case "set":
-		if st.records {
-			p.Errorf(t.Pos, "set must come before the first record")
-			return false
-		}
-		return p.set(&z.Options, scopeZone)
-	case "ptr", "no":
-		isMX := t.Text == "no" && p.Is("no", "mx")
+	if p.isSetting() {
+		isMX := p.Is("no", "mx")
 		if st.records && !isMX {
-			p.Errorf(t.Pos, "%s must come before the first record", statementName(p))
+			p.Errorf(t.Pos, "%s must come before the first record", p.settingName())
 			return false
 		}
 		if isMX && len(z.MX) > 0 {
 			p.Errorf(t.Pos, `"no mx" conflicts with the mx record at %s`, z.MX[0].Pos)
 			return false
 		}
-		return p.ptrStatement(&z.Options, &z.NoMX)
+		return p.setting(&z.Options, true, &z.NoMX)
+	}
+	switch t.Text {
 	case "network":
 		if st.hosts {
 			p.Errorf(t.Pos, "network must come before the first host")
@@ -465,8 +459,7 @@ func (p *parser) zoneStmt(z *Zone, st *blockState) bool {
 		z.SRVs = append(z.SRVs, s)
 		return ok
 	}
-	p.Errorf(t.Pos, "unknown statement %q in zone", t.Text)
-	return false
+	return p.unknown(" in zone")
 }
 
 func family(pfx netip.Prefix) string {
@@ -665,19 +658,19 @@ func (p *parser) reverse() bool {
 
 func (p *parser) reverseStmt(r *Reverse, st *blockState) bool {
 	t := p.Tok()
-	switch t.Text {
-	case "set":
+	if p.isSetting() {
 		if st.records {
-			p.Errorf(t.Pos, "set must come before the first record")
+			p.Errorf(t.Pos, "%s must come before the first record", p.settingName())
 			return false
 		}
-		return p.set(&r.Options, scopeReverse)
+		return p.setting(&r.Options, false, nil)
+	}
+	switch t.Text {
 	case "nameserver":
 		st.records = true
 		ns, ok := p.nameserver(true)
 		r.Nameservers = append(r.Nameservers, ns...)
 		return ok
 	}
-	p.Errorf(t.Pos, "unknown statement %q in reverse block", t.Text)
-	return false
+	return p.unknown(" in reverse block")
 }

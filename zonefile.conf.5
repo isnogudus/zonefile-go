@@ -26,9 +26,7 @@ The forward zones with their hosts, aliases and records.
 Macros may be defined and
 .Ic include
 may be used anywhere at top level.
-Global
-.Ic set
-statements must come before the first
+Global settings must come before the first
 .Ic zone
 or
 .Ic reverse
@@ -100,16 +98,15 @@ which must be quoted, at this point.
 A relative path is resolved against the directory of the including file.
 .El
 .Sh GLOBAL CONFIGURATION
-.Bl -tag -width Ds
-.It Ic set Ar option value
-Set a default.
-At top level it applies to all zones; inside a
+Settings give the values of a zone.
+At top level they are the defaults for all zones; inside a
 .Ic zone
 or
 .Ic reverse
-block it applies to that block and must come before its first record.
-Each option may be set once per scope.
-.Bl -tag -width "srv-priority"
+block they override them for that block and must come before its first
+record.
+Each setting may be given once per scope.
+.Bl -tag -width Ds
 .It Ic email Ar address
 Contact address for the SOA record.
 Required.
@@ -127,36 +124,13 @@ SOA expire; default 2w.
 SOA minimum, the TTL of negative answers; default 1h.
 .It Ic serial Ar number
 A fixed serial instead of the computed one.
-.It Ic mx-priority Ar number
-Priority of
-.Ic mx
-records that give none; default 0.
-Not allowed in
-.Ic reverse
-blocks.
-.It Ic srv-priority Ar number
-Priority of
-.Ic srv
-records that give none; default 5.
-Not allowed in
-.Ic reverse
-blocks.
-.It Ic srv-weight Ar number
-Weight of
-.Ic srv
-records that give none; default 10.
-Not allowed in
-.Ic reverse
-blocks.
-.El
 .It Oo Ic no Oc Ic ptr
 Whether hosts get PTR records; by default they do.
 At top level this sets the default for all zones; inside a
 .Ic zone
 it overrides it for that zone.
-It follows the same ordering rule as
-.Ic set
-and is not allowed in
+It follows the same ordering rule as the settings above and is not
+allowed in
 .Ic reverse
 blocks.
 .It Ic nameserver Ar name | { name ... } Op Ic ttl Ar duration
@@ -183,9 +157,16 @@ reverse zone whose network contains it.
 Addresses outside every reverse network get none, so external addresses
 in forward zones never lead to PTR records for zones that are not served.
 .Pp
-The optional block may contain
-.Ic set
-statements for the SOA values and
+The optional block may contain the settings
+.Ic email ,
+.Ic ttl ,
+.Ic refresh ,
+.Ic retry ,
+.Ic expire ,
+.Ic negative-ttl
+and
+.Ic serial ,
+and
 .Ic nameserver
 statements with absolute names.
 .El
@@ -204,8 +185,7 @@ is the zone itself and
 a wildcard label.
 A zone may contain:
 .Bl -tag -width Ds
-.It Ic set Ar option value
-As in the global configuration.
+.It Ic email , ttl , refresh , retry , expire , negative-ttl , serial
 .It Oo Ic no Oc Ic ptr
 As in the global configuration.
 .It Ic no mx
@@ -222,6 +202,7 @@ Must come before the first
 The nameservers of the zone.
 .It Ic mx Ar name Oo Ic priority Ar number Oc Op Ic ttl Ar duration
 A mail exchanger of the zone.
+The default priority is 0, here and at top level.
 .It Xo
 .Ic host Ar name address | { address ... }
 .Op Ic alias Ar name | { name ... }
@@ -266,6 +247,7 @@ Its name must not be used by any other record of the zone.
 .Op Ic ttl Ar duration
 .Xc
 An SRV record.
+The default priority is 5, the default weight 10.
 .El
 .Pp
 Within a zone, a host must not be declared twice, and the same name with
@@ -283,7 +265,7 @@ Example configuration file.
 .Bd -literal -offset indent
 lan = "{ 192.168.1.0/24 fd00:1::/64 }"
 
-set email hostmaster@example.com
+email hostmaster@example.com
 nameserver ns1.example.com.
 
 reverse { 192.168.1.0/24 fd00:1::/64 }

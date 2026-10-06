@@ -11,30 +11,24 @@ import (
 
 // settings are the effective options of a scope.
 type settings struct {
-	email     string
-	ttl       uint32
-	refresh   uint32
-	retry     uint32
-	expire    uint32
-	negTTL    uint32
-	serial    *uint32
-	mxPrio    uint16
-	srvPrio   uint16
-	srvWeight uint16
-	ptr       bool
+	email   string
+	ttl     uint32
+	refresh uint32
+	retry   uint32
+	expire  uint32
+	negTTL  uint32
+	serial  *uint32
+	ptr     bool
 }
 
 func defaults() settings {
 	return settings{
-		ttl:       DefaultTTL,
-		refresh:   DefaultRefresh,
-		retry:     DefaultRetry,
-		expire:    DefaultExpire,
-		negTTL:    DefaultNegativeTTL,
-		mxPrio:    DefaultMXPriority,
-		srvPrio:   DefaultSRVPriority,
-		srvWeight: DefaultSRVWeight,
-		ptr:       true,
+		ttl:     DefaultTTL,
+		refresh: DefaultRefresh,
+		retry:   DefaultRetry,
+		expire:  DefaultExpire,
+		negTTL:  DefaultNegativeTTL,
+		ptr:     true,
 	}
 }
 
@@ -44,7 +38,7 @@ func override[T any](dst *T, v *T) {
 	}
 }
 
-// with returns s overridden by the options set in a scope.
+// with returns s overridden by the settings of a scope.
 func (s settings) with(o config.Options) settings {
 	override(&s.email, o.Email)
 	override(&s.ttl, o.TTL)
@@ -55,9 +49,6 @@ func (s settings) with(o config.Options) settings {
 	if o.Serial != nil {
 		s.serial = o.Serial
 	}
-	override(&s.mxPrio, o.MXPriority)
-	override(&s.srvPrio, o.SRVPriority)
-	override(&s.srvWeight, o.SRVWeight)
 	override(&s.ptr, o.PTR)
 	return s
 }
@@ -123,7 +114,7 @@ func Resolve(cfg *config.Config) ([]*Zone, error) {
 
 func (r *resolver) soa(pos config.Pos, name string, s settings) SOA {
 	if s.email == "" {
-		r.errorf(pos, `zone %s has no e-mail address, add "set email"`, name)
+		r.errorf(pos, `zone %s has no e-mail address, add "email"`, name)
 	}
 	if s.retry >= s.refresh {
 		r.errorf(pos, "zone %s: retry (%d) must be less than refresh (%d)", name, s.retry, s.refresh)
@@ -200,7 +191,7 @@ func (r *resolver) forward(cz *config.Zone, global settings) (*Zone, []ptrCandid
 		if !ok {
 			continue
 		}
-		mx := MX{Name: mxName, Priority: s.mxPrio, TTL: s.ttl}
+		mx := MX{Name: mxName, Priority: DefaultMXPriority, TTL: s.ttl}
 		override(&mx.Priority, m.Priority)
 		override(&mx.TTL, m.TTL)
 		z.MX = append(z.MX, mx)
@@ -343,7 +334,7 @@ func (r *resolver) srv(z *Zone, sv config.SRV, s settings, own *owners) {
 		return
 	}
 	own.other[key] = sv.Pos
-	rec := SRV{Name: name, Target: target, Port: sv.Port, Priority: s.srvPrio, Weight: s.srvWeight, TTL: s.ttl}
+	rec := SRV{Name: name, Target: target, Port: sv.Port, Priority: DefaultSRVPriority, Weight: DefaultSRVWeight, TTL: s.ttl}
 	override(&rec.Priority, sv.Priority)
 	override(&rec.Weight, sv.Weight)
 	override(&rec.TTL, sv.TTL)

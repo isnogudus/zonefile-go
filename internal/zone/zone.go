@@ -5,7 +5,8 @@ package zone
 
 import "net/netip"
 
-// Defaults of zonefile-rs (src/constants.rs).
+// Defaults of zonefile-rs (src/constants.rs). The priority and weight
+// apply to mx and srv records that give none.
 const (
 	DefaultTTL         = 10800
 	DefaultRefresh     = 7200
