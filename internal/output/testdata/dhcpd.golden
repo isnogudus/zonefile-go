@@ -18,4 +18,16 @@ subnet 192.0.2.0 netmask 255.255.255.0 {
 		fixed-address 192.0.2.3;
 		option host-name "mail";
 	}
+
+	# profile filtered
+	group {
+		option domain-name-servers 192.0.2.53;
+		default-lease-time 1800;
+
+		host tv.example.com {
+			hardware ethernet 00:00:5e:00:53:14;
+			fixed-address 192.0.2.20;
+			option host-name "tv";
+		}
+	}
 }

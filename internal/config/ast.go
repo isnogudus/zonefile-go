@@ -37,8 +37,10 @@ type Options struct {
 	NegativeTTL *uint32
 	Serial      *uint32
 	PTR         *bool
-	// DHCP is set by dhcp and no dhcp, which exist only in zones.
-	DHCP *bool
+	// DHCP and DHCPProfile are set by dhcp, no dhcp and dhcp-profile,
+	// which exist only in zones.
+	DHCP        *bool
+	DHCPProfile *string
 }
 
 type Nameserver struct {
@@ -91,8 +93,10 @@ type Host struct {
 	NoInet6 bool
 	// MACs are the hardware addresses given with mac, in lower case.
 	MACs []string
-	// DHCP is set by dhcp and no dhcp on the host.
-	DHCP *bool
+	// DHCP is set by dhcp and no dhcp on the host, DHCPProfile by
+	// dhcp-profile.
+	DHCP        *bool
+	DHCPProfile *string
 }
 
 type CNAME struct {
@@ -122,9 +126,15 @@ type Reverse struct {
 // DHCP is a dhcp block: the settings of one IPv4 subnet for dhcpd. Addresses
 // may be suffixes, resolved against Network.
 type DHCP struct {
-	Pos        Pos
-	Network    netip.Prefix
-	Ranges     []DHCPRange
+	Pos     Pos
+	Network netip.Prefix
+	Ranges  []DHCPRange
+	DHCPOptions
+	Profiles []*DHCPProfile
+}
+
+// DHCPOptions are the options of a dhcp block or a profile in it.
+type DHCPOptions struct {
 	Routers    []HostAddr
 	DNSServers []HostAddr
 	NTPServers []HostAddr
@@ -132,6 +142,14 @@ type DHCP struct {
 	Search     []string
 	Lease      *uint32
 	MaxLease   *uint32
+}
+
+// DHCPProfile is a profile in a dhcp block: options for the hosts that
+// name it with dhcp-profile.
+type DHCPProfile struct {
+	Pos  Pos
+	Name string
+	DHCPOptions
 }
 
 // DHCPRange is a range of addresses that dhcpd hands out dynamically.

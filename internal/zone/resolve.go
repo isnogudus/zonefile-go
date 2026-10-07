@@ -240,6 +240,10 @@ func (r *resolver) forward(cz *config.Zone, global settings) (*Zone, []ptrCandid
 		z.MX = append(z.MX, mx)
 	}
 
+	if p := cz.Options.DHCPProfile; p != nil && (cz.Options.DHCP == nil || !*cz.Options.DHCP) && !r.profileDefined(*p) {
+		r.warnf(cz.Pos, "zone %s: dhcp-profile %s is not defined in any dhcp block", name, *p)
+	}
+
 	own := newOwners()
 	own.other[strings.ToLower(name)] = cz.Pos // apex: SOA and NS
 
@@ -461,11 +465,19 @@ func (r *resolver) hostDHCP(cz *config.Zone, h config.Host, name string, addrs [
 	on := false
 	override(&on, cz.Options.DHCP)
 	override(&on, h.DHCP)
+	var profile string
+	override(&profile, cz.Options.DHCPProfile)
+	override(&profile, h.DHCPProfile)
 	switch {
 	case h.DHCP != nil && *h.DHCP && len(h.MACs) == 0:
 		r.errorf(h.Pos, "host %s: dhcp needs a mac", name)
 		return
 	case !on || len(h.MACs) == 0:
+		// A profile rests like a mac; only catch names defined nowhere.
+		// The zone's own profile is checked once for the zone.
+		if h.DHCPProfile != nil && !r.profileDefined(*h.DHCPProfile) {
+			r.warnf(h.Pos, "host %s: dhcp-profile %s is not defined in any dhcp block", name, *h.DHCPProfile)
+		}
 		return
 	}
 
@@ -479,5 +491,5 @@ func (r *resolver) hostDHCP(cz *config.Zone, h config.Host, name string, addrs [
 		r.errorf(h.Pos, "host %s: dhcp needs an IPv4 address", name)
 		return
 	}
-	r.dhcpHosts = append(r.dhcpHosts, dhcpHost{pos: h.Pos, name: name, addrs: v4, macs: h.MACs})
+	r.dhcpHosts = append(r.dhcpHosts, dhcpHost{pos: h.Pos, name: name, addrs: v4, macs: h.MACs, profile: profile})
 }

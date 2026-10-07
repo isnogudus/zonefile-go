@@ -46,37 +46,58 @@ func quoted(list []string) string {
 	return strings.Join(s, ", ")
 }
 
+// dhcpdOptions writes the options of a subnet or profile, each line
+// indented by indent.
+func dhcpdOptions(b *bytes.Buffer, indent string, o zone.DHCPOptions) {
+	if len(o.Routers) > 0 {
+		fmt.Fprintf(b, "%soption routers %s;\n", indent, addrs(o.Routers))
+	}
+	if len(o.DNSServers) > 0 {
+		fmt.Fprintf(b, "%soption domain-name-servers %s;\n", indent, addrs(o.DNSServers))
+	}
+	if o.Domain != "" {
+		fmt.Fprintf(b, "%soption domain-name %q;\n", indent, o.Domain)
+	}
+	if len(o.Search) > 0 {
+		fmt.Fprintf(b, "%soption domain-search %s;\n", indent, quoted(o.Search))
+	}
+	if len(o.NTPServers) > 0 {
+		fmt.Fprintf(b, "%soption ntp-servers %s;\n", indent, addrs(o.NTPServers))
+	}
+	if o.Lease != 0 {
+		fmt.Fprintf(b, "%sdefault-lease-time %d;\n", indent, o.Lease)
+	}
+	if o.MaxLease != 0 {
+		fmt.Fprintf(b, "%smax-lease-time %d;\n", indent, o.MaxLease)
+	}
+}
+
+func dhcpdHosts(b *bytes.Buffer, indent string, hosts []zone.DHCPHost) {
+	for _, h := range hosts {
+		fmt.Fprintf(b, "\n%shost %s {\n", indent, h.Name)
+		fmt.Fprintf(b, "%s\thardware ethernet %s;\n", indent, h.MAC)
+		fmt.Fprintf(b, "%s\tfixed-address %s;\n", indent, addrs(h.Addrs))
+		fmt.Fprintf(b, "%s\toption host-name %q;\n", indent, h.HostName)
+		fmt.Fprintf(b, "%s}\n", indent)
+	}
+}
+
 func dhcpdSubnet(b *bytes.Buffer, s *zone.Subnet) {
 	fmt.Fprintf(b, "subnet %s netmask %s {\n", s.Network.Addr(), netmask(s.Network))
-	if len(s.Routers) > 0 {
-		fmt.Fprintf(b, "\toption routers %s;\n", addrs(s.Routers))
-	}
-	if len(s.DNSServers) > 0 {
-		fmt.Fprintf(b, "\toption domain-name-servers %s;\n", addrs(s.DNSServers))
-	}
-	if s.Domain != "" {
-		fmt.Fprintf(b, "\toption domain-name %q;\n", s.Domain)
-	}
-	if len(s.Search) > 0 {
-		fmt.Fprintf(b, "\toption domain-search %s;\n", quoted(s.Search))
-	}
-	if len(s.NTPServers) > 0 {
-		fmt.Fprintf(b, "\toption ntp-servers %s;\n", addrs(s.NTPServers))
-	}
-	if s.Lease != 0 {
-		fmt.Fprintf(b, "\tdefault-lease-time %d;\n", s.Lease)
-	}
-	if s.MaxLease != 0 {
-		fmt.Fprintf(b, "\tmax-lease-time %d;\n", s.MaxLease)
-	}
+	dhcpdOptions(b, "\t", s.DHCPOptions)
 	for _, r := range s.Ranges {
 		fmt.Fprintf(b, "\trange %s %s;\n", r.Low, r.High)
 	}
-	for _, h := range s.Hosts {
-		fmt.Fprintf(b, "\n\thost %s {\n", h.Name)
-		fmt.Fprintf(b, "\t\thardware ethernet %s;\n", h.MAC)
-		fmt.Fprintf(b, "\t\tfixed-address %s;\n", addrs(h.Addrs))
-		fmt.Fprintf(b, "\t\toption host-name %q;\n", h.HostName)
+	dhcpdHosts(b, "\t", s.Hosts)
+	// A profile becomes a group, whose options override those of the
+	// subnet for its hosts. Profiles without hosts are left out.
+	for _, p := range s.Profiles {
+		if len(p.Hosts) == 0 {
+			continue
+		}
+		fmt.Fprintf(b, "\n\t# profile %s\n\tgroup {\n", p.Name)
+		dhcpdOptions(b, "\t\t", p.DHCPOptions)
+		dhcpdHosts(b, "\t\t", p.Hosts)
 		b.WriteString("\t}\n")
 	}
 	b.WriteString("}\n")

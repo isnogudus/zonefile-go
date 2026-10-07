@@ -9,22 +9,39 @@ import (
 	"github.com/isnogudus/zonefile-go/internal/config"
 )
 
-// Subnet is a dhcp block with all addresses resolved, and the hosts with a
-// MAC address whose IPv4 address lies in it.
+// Subnet is a dhcp block with all addresses resolved, and the hosts with
+// dhcp on whose IPv4 address lies in it.
 type Subnet struct {
-	Network    netip.Prefix
-	Ranges     []Range
+	Network netip.Prefix
+	Ranges  []Range
+	DHCPOptions
+	// Hosts are the hosts without a profile. Hosts here and in profiles are
+	// sorted by address, and for the same address in the order of the
+	// configuration.
+	Hosts []DHCPHost
+	// Profiles are the profiles of the block in configuration order, with
+	// the hosts that use them.
+	Profiles []*Profile
+}
+
+// DHCPOptions are the options of a subnet or a profile. Zero values are
+// not written.
+type DHCPOptions struct {
 	Routers    []netip.Addr
 	DNSServers []netip.Addr
 	NTPServers []netip.Addr
 	// Domain and Search are without the trailing dot.
 	Domain string
 	Search []string
-	// Lease and MaxLease are in seconds; 0 leaves the dhcpd default.
+	// Lease and MaxLease are in seconds.
 	Lease    uint32
 	MaxLease uint32
-	// Hosts are sorted by address, and for the same address in the order
-	// of the configuration.
+}
+
+// Profile is a profile of a dhcp block and the hosts that use it.
+type Profile struct {
+	Name string
+	DHCPOptions
 	Hosts []DHCPHost
 }
 
@@ -48,10 +65,11 @@ type DHCPHost struct {
 // dhcpHost is a host with dhcp on and its MAC addresses, collected while
 // resolving zones.
 type dhcpHost struct {
-	pos   config.Pos
-	name  string
-	addrs []netip.Addr // IPv4 only
-	macs  []string
+	pos     config.Pos
+	name    string
+	addrs   []netip.Addr // IPv4 only
+	macs    []string
+	profile string // "" for none
 }
 
 // subnetAddr resolves an address of a dhcp block: a suffix against the
@@ -98,8 +116,40 @@ func (r *resolver) domainName(pos config.Pos, name string) string {
 	return strings.TrimSuffix(abs, ".")
 }
 
-// dhcp builds the subnets of the dhcp blocks and places the hosts with MAC
-// addresses in them.
+// dhcpOptions resolves the options of a dhcp block or profile.
+func (r *resolver) dhcpOptions(pos config.Pos, n netip.Prefix, o config.DHCPOptions) DHCPOptions {
+	var out DHCPOptions
+	out.Routers = r.subnetAddrs(pos, n, o.Routers, "router", true)
+	out.DNSServers = r.subnetAddrs(pos, n, o.DNSServers, "dns-server", false)
+	out.NTPServers = r.subnetAddrs(pos, n, o.NTPServers, "ntp-server", false)
+	if o.Domain != nil {
+		out.Domain = r.domainName(pos, *o.Domain)
+	}
+	for _, name := range o.Search {
+		out.Search = append(out.Search, r.domainName(pos, name))
+	}
+	override(&out.Lease, o.Lease)
+	override(&out.MaxLease, o.MaxLease)
+	if out.Lease != 0 && out.MaxLease != 0 && out.Lease > out.MaxLease {
+		r.errorf(pos, "dhcp %s: lease (%d) must not be longer than max-lease (%d)", n, out.Lease, out.MaxLease)
+	}
+	return out
+}
+
+// profileDefined reports whether any dhcp block defines a profile name.
+func (r *resolver) profileDefined(name string) bool {
+	for _, d := range r.cfg.DHCP {
+		for _, p := range d.Profiles {
+			if p.Name == name {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// dhcp builds the subnets of the dhcp blocks and places the hosts with dhcp
+// on in them, in their profile if they name one.
 func (r *resolver) dhcp(hosts []dhcpHost) []*Subnet {
 	var subnets []*Subnet
 	for _, d := range r.cfg.DHCP {
@@ -133,19 +183,9 @@ func (r *resolver) dhcp(hosts []dhcpHost) []*Subnet {
 			}
 			s.Ranges = append(s.Ranges, rng)
 		}
-		s.Routers = r.subnetAddrs(d.Pos, n, d.Routers, "router", true)
-		s.DNSServers = r.subnetAddrs(d.Pos, n, d.DNSServers, "dns-server", false)
-		s.NTPServers = r.subnetAddrs(d.Pos, n, d.NTPServers, "ntp-server", false)
-		if d.Domain != nil {
-			s.Domain = r.domainName(d.Pos, *d.Domain)
-		}
-		for _, name := range d.Search {
-			s.Search = append(s.Search, r.domainName(d.Pos, name))
-		}
-		override(&s.Lease, d.Lease)
-		override(&s.MaxLease, d.MaxLease)
-		if s.Lease != 0 && s.MaxLease != 0 && s.Lease > s.MaxLease {
-			r.errorf(d.Pos, "dhcp %s: lease (%d) must not be longer than max-lease (%d)", n, s.Lease, s.MaxLease)
+		s.DHCPOptions = r.dhcpOptions(d.Pos, n, d.DHCPOptions)
+		for _, cp := range d.Profiles {
+			s.Profiles = append(s.Profiles, &Profile{Name: cp.Name, DHCPOptions: r.dhcpOptions(cp.Pos, n, cp.DHCPOptions)})
 		}
 		subnets = append(subnets, s)
 	}
@@ -172,6 +212,15 @@ func (r *resolver) dhcp(hosts []dhcpHost) []*Subnet {
 			if len(addrs) == 0 {
 				continue
 			}
+			dst := &s.Hosts
+			if h.profile != "" {
+				i := slices.IndexFunc(s.Profiles, func(p *Profile) bool { return p.Name == h.profile })
+				if i < 0 {
+					r.errorf(h.pos, "host %s: dhcp %s has no profile %s", h.name, s.Network, h.profile)
+					continue
+				}
+				dst = &s.Profiles[i].Hosts
+			}
 			base := strings.TrimSuffix(h.name, ".")
 			short, rest, _ := strings.Cut(base, ".")
 			for _, mac := range h.macs {
@@ -183,18 +232,21 @@ func (r *resolver) dhcp(hosts []dhcpHost) []*Subnet {
 						name += "." + rest
 					}
 				}
-				s.Hosts = append(s.Hosts, DHCPHost{Name: name, HostName: short, MAC: mac, Addrs: addrs})
+				*dst = append(*dst, DHCPHost{Name: name, HostName: short, MAC: mac, Addrs: addrs})
 			}
 		}
 		if !inNetwork {
 			r.errorf(h.pos, "host %s: dhcp needs an IPv4 address in the network of a dhcp block", h.name)
 		}
 	}
+
+	// By address; for the same address, in configuration order.
+	byAddr := func(a, b DHCPHost) int { return a.Addrs[0].Compare(b.Addrs[0]) }
 	for _, s := range subnets {
-		// By address; for the same address, in configuration order.
-		slices.SortStableFunc(s.Hosts, func(a, b DHCPHost) int {
-			return a.Addrs[0].Compare(b.Addrs[0])
-		})
+		slices.SortStableFunc(s.Hosts, byAddr)
+		for _, p := range s.Profiles {
+			slices.SortStableFunc(p.Hosts, byAddr)
+		}
 	}
 	return subnets
 }

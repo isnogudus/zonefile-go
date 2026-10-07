@@ -9,6 +9,7 @@ local-data: "example.com.                                    IN AAAA 2001:db8::1
 local-data: "ftp.example.com.                            300 IN A    192.0.2.2"
 local-data: "ftp.example.com.                            300 IN AAAA 2001:db8::2"
 local-data: "mail.example.com.                               IN A    192.0.2.3"
+local-data: "tv.example.com.                                 IN A    192.0.2.20"
 local-data: "very-long-alias-name-for-column-tests.example.com. 300 IN A    192.0.2.2"
 local-data: "very-long-alias-name-for-column-tests.example.com. 300 IN AAAA 2001:db8::2"
 local-data: "www.example.com.                            300 IN A    192.0.2.2"
@@ -22,6 +23,7 @@ local-data:     "2.0.192.in-addr.arpa.                           IN NS   ns1.exa
 local-data-ptr: "192.0.2.1                                       example.com."
 local-data-ptr: "192.0.2.2                                   300 www.example.com."
 local-data-ptr: "192.0.2.3                                       mail.example.com."
+local-data-ptr: "192.0.2.20                                      tv.example.com."
 
 local-zone:      0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa. static
 local-data:     "0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa. 10800 IN SOA  ns1.example.com. hostmaster.example.com. 2026100400 7200 3600 1209600 3600"

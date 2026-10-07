@@ -213,6 +213,10 @@ Hosts without a
 .Ic mac
 are left out.
 Like the settings, it must come before the first record.
+.It Ic dhcp-profile Ar name
+The default profile of the hosts of the zone, see
+.Sx DHCP ;
+it must come before the first record.
 .It Ic no mx
 The zone has no MX records, not even the top-level ones.
 Not allowed together with
@@ -237,6 +241,7 @@ The default priority is 0, here and at top level.
 .Op Ic no inet6
 .Op Ic mac Ar address | { address ... }
 .Op Oo Ic no Oc Ic dhcp
+.Op Ic dhcp-profile Ar name
 .Xc
 Create one A or AAAA record per address.
 An address is a full IPv4 or IPv6 address, or a suffix such as
@@ -283,6 +288,9 @@ block whose network holds its IPv4 address, see
 it needs a
 .Ic mac ,
 and it is an error if there is no such block.
+.Ic dhcp-profile
+puts the host into a profile of that block and overrides the profile of
+the zone.
 .It Ic cname Ar name target Op Ic ttl Ar duration
 A CNAME record.
 Its name must not be used by any other record of the zone.
@@ -345,6 +353,18 @@ the addresses must lie within the network.
 .Ic max-lease-time ;
 .Ic lease
 must not be longer.
+.It Ic profile Ar name No { ... }
+Options for the hosts that name the profile with
+.Ic dhcp-profile :
+any of the statements above except
+.Ic range .
+Each name may be used once per block; several blocks may define profiles
+of the same name, and a host gets the one of the block that holds its
+address.
+A profile that is used becomes a
+.Ic group
+inside the subnet, whose options override those of the subnet for its
+hosts.
 .El
 .Pp
 Every host with a
@@ -364,7 +384,14 @@ further ones are named
 and so on.
 It is an error if such a host has no IPv4 address in the network of a
 .Ic dhcp
-block, or if its fixed address lies in a dynamic range.
+block, if its fixed address lies in a dynamic range, or if its
+.Ic dhcp-profile
+is not defined in that block.
+While dhcp is off for a host, its
+.Ic dhcp-profile
+is kept unused; if no
+.Ic dhcp
+block defines the name at all, zonefile-go warns.
 .El
 .Sh FILES
 .Bl -tag -width Ds

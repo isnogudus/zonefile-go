@@ -516,6 +516,8 @@ func TestResolveDHCPErrors(t *testing.T) {
 			`test.conf:5: host y.a.example.: MAC address 00:00:5e:00:53:01 already used at test.conf:4`}},
 		{"zone dhcp, host outside network", "dhcp 10.0.0.0/24 {\n}\nzone a.example {\n\tdhcp\n\thost x 10.1.0.1 mac 00:00:5e:00:53:01\n}\n", []string{
 			`test.conf:7: host x.a.example.: dhcp needs an IPv4 address in the network of a dhcp block`}},
+		{"profile missing in subnet", "dhcp 10.0.0.0/24 {\n}\ndhcp 10.0.1.0/24 {\n\tprofile kids {\n\t}\n}\nzone a.example {\n\thost x 10.0.0.1 mac 00:00:5e:00:53:01 dhcp dhcp-profile kids\n}\n", []string{
+			`test.conf:10: host x.a.example.: dhcp 10.0.0.0/24 has no profile kids`}},
 		{"range outside", "dhcp 10.0.0.0/24 {\n\trange 10.0.1.1 10.0.1.9\n}\n", []string{
 			`test.conf:4: dhcp 10.0.0.0/24: range 10.0.1.1-10.0.1.9 is outside the network`}},
 		{"range reversed", "dhcp 10.0.0.0/24 {\n\trange .200 .100\n}\n", []string{
@@ -572,5 +574,90 @@ zone b.example {
 	}
 	if want := []string{"on.a.example", "inherits.b.example"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("hosts = %v, want %v", got, want)
+	}
+}
+
+func TestResolveDHCPProfiles(t *testing.T) {
+	res, err := resolveAll(t, dhcpHead+`
+dhcp 10.0.0.0/24 {
+	dns-server .1
+	profile kids {
+		dns-server .53
+	}
+	profile unused {
+		lease 1h
+	}
+}
+zone a.example {
+	dhcp
+	dhcp-profile kids
+	host tv     10.0.0.20 mac 00:00:5e:00:53:20
+	host laptop 10.0.0.21 mac 00:00:5e:00:53:21 dhcp-profile none-needed no dhcp
+	host nas    10.0.0.22 mac 00:00:5e:00:53:22
+}
+zone b.example {
+	host pc 10.0.0.30 mac 00:00:5e:00:53:30 dhcp
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := res.DHCP[0]
+	names := func(hosts []DHCPHost) []string {
+		var out []string
+		for _, h := range hosts {
+			out = append(out, h.Name)
+		}
+		return out
+	}
+	if got := names(s.Hosts); !reflect.DeepEqual(got, []string{"pc.b.example"}) {
+		t.Errorf("hosts without profile = %v", got)
+	}
+	kids := s.Profiles[0]
+	if kids.Name != "kids" || kids.DNSServers[0].String() != "10.0.0.53" {
+		t.Errorf("profile = %+v", kids)
+	}
+	if got := names(kids.Hosts); !reflect.DeepEqual(got, []string{"tv.a.example", "nas.a.example"}) {
+		t.Errorf("kids hosts = %v", got)
+	}
+	if len(s.Profiles[1].Hosts) != 0 {
+		t.Errorf("unused profile has hosts: %v", s.Profiles[1].Hosts)
+	}
+	// laptop has dhcp off: its unknown profile is only a warning.
+	var warns []string
+	for _, w := range res.Warnings {
+		warns = append(warns, w.Error())
+	}
+	want := []string{`test.conf:17: warning: host laptop.a.example.: dhcp-profile none-needed is not defined in any dhcp block`}
+	if !reflect.DeepEqual(warns, want) {
+		t.Errorf("warnings:\n  %s\nwant\n  %s", strings.Join(warns, "\n  "), strings.Join(want, "\n  "))
+	}
+}
+
+func TestResolveDHCPProfileWarnings(t *testing.T) {
+	res, err := resolveAll(t, dhcpHead+`
+dhcp 10.0.0.0/24 {
+	profile kids {
+	}
+}
+zone a.example {
+	dhcp-profile kdis
+	host tv 10.0.0.20 mac 00:00:5e:00:53:20
+}
+zone b.example {
+	dhcp-profile kids
+	host tv 10.0.0.21 mac 00:00:5e:00:53:21
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var warns []string
+	for _, w := range res.Warnings {
+		warns = append(warns, w.Error())
+	}
+	want := []string{`test.conf:8: warning: zone a.example.: dhcp-profile kdis is not defined in any dhcp block`}
+	if !reflect.DeepEqual(warns, want) {
+		t.Errorf("warnings:\n  %s\nwant\n  %s", strings.Join(warns, "\n  "), strings.Join(want, "\n  "))
 	}
 }

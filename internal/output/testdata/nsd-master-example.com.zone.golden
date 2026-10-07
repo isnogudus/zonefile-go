@@ -16,6 +16,7 @@ $TTL 10800
 ftp                         300 A       192.0.2.2
                             300 AAAA    2001:db8::2
 mail                            A       192.0.2.3
+tv                              A       192.0.2.20
 very-long-alias-name-for-column-tests 300 A 192.0.2.2
                             300 AAAA    2001:db8::2
 www                         300 A       192.0.2.2

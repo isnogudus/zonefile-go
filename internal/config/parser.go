@@ -16,9 +16,9 @@ import (
 const maxDuration = math.MaxInt32 * time.Second
 
 var keywords = []string{
-	"alias", "cname", "dhcp", "dns-server", "domain", "email", "expire",
+	"alias", "cname", "dhcp", "dhcp-profile", "dns-server", "domain", "email", "expire",
 	"host", "inet", "inet6", "lease", "mac", "max-lease", "mx", "nameserver",
-	"network", "no", "ntp-server", "port", "priority", "ptr", "range",
+	"network", "no", "ntp-server", "port", "priority", "profile", "ptr", "range",
 	"refresh", "retry", "reverse", "router", "search", "serial", "set", "srv",
 	"ttl", "weight", "yes", "zone",
 }
@@ -106,6 +106,10 @@ func (p *parser) unknown(where string) bool {
 		} else {
 			p.Errorf(t.Pos, `"set" is not supported`)
 		}
+	case "dhcp-profile":
+		p.Errorf(t.Pos, `"dhcp-profile" is only allowed in a zone or on a host; profiles are defined in dhcp blocks`)
+	case "profile":
+		p.Errorf(t.Pos, `"profile" is only allowed in a dhcp block`)
 	case "mx-priority":
 		p.Errorf(t.Pos, `"mx-priority" is not supported, give the priority on each mx`)
 	case "srv-priority", "srv-weight":
@@ -420,7 +424,8 @@ func (p *parser) zone() bool {
 
 func (p *parser) zoneStmt(z *Zone, st *blockState) bool {
 	t := p.Tok()
-	if t.Text == "dhcp" {
+	switch t.Text {
+	case "dhcp":
 		// A switch like ptr; at top level dhcp opens a block instead.
 		if st.records {
 			p.Errorf(t.Pos, `"dhcp" must come before the first record`)
@@ -428,6 +433,14 @@ func (p *parser) zoneStmt(z *Zone, st *blockState) bool {
 		}
 		p.Next()
 		return once(p, t, &z.Options.DHCP, true)
+	case "dhcp-profile":
+		if st.records {
+			p.Errorf(t.Pos, `"dhcp-profile" must come before the first record`)
+			return false
+		}
+		p.Next()
+		name, ok := p.name()
+		return ok && once(p, t, &z.Options.DHCPProfile, name)
 	}
 	if p.isSetting() {
 		isMX := p.Is("no", "mx")
@@ -538,6 +551,11 @@ func (p *parser) host() (Host, bool) {
 			})
 		case "dhcp":
 			ok = once(p, kw, &h.DHCP, true)
+		case "dhcp-profile":
+			var name string
+			if name, ok = p.name(); ok {
+				ok = once(p, kw, &h.DHCPProfile, name)
+			}
 		case "mac":
 			if h.MACs != nil {
 				p.Errorf(kw.Pos, "%q given twice", kw.Text)
@@ -766,9 +784,9 @@ func (p *parser) dhcp() bool {
 
 func (p *parser) dhcpStmt(d *DHCP) bool {
 	kw := p.Tok()
-	p.Next()
 	switch kw.Text {
 	case "range":
+		p.Next()
 		r := DHCPRange{Pos: kw.Pos}
 		var ok bool
 		if r.Low, ok = p.hostAddr(); !ok {
@@ -779,30 +797,67 @@ func (p *parser) dhcpStmt(d *DHCP) bool {
 		}
 		d.Ranges = append(d.Ranges, r)
 		return true
+	case "profile":
+		p.Next()
+		name, ok := p.name()
+		if !ok {
+			return false
+		}
+		for _, o := range d.Profiles {
+			if o.Name == name {
+				p.Errorf(kw.Pos, "profile %q already defined at %s", name, o.Pos)
+				return false
+			}
+		}
+		prof := &DHCPProfile{Pos: kw.Pos, Name: name}
+		d.Profiles = append(d.Profiles, prof)
+		if p.Tok().Kind != obsdconf.LBrace {
+			return p.Expected(`"{"`)
+		}
+		return p.Block(fmt.Sprintf("profile %q", name), func() bool {
+			return p.dhcpOption(&prof.DHCPOptions, "profile")
+		})
+	}
+	return p.dhcpOption(&d.DHCPOptions, "dhcp block")
+}
+
+var dhcpOptionWords = map[string]bool{
+	"router": true, "dns-server": true, "ntp-server": true, "domain": true,
+	"search": true, "lease": true, "max-lease": true,
+}
+
+// dhcpOption parses one option of a dhcp block or profile into o. where
+// names the block for an unknown statement.
+func (p *parser) dhcpOption(o *DHCPOptions, where string) bool {
+	kw := p.Tok()
+	if !dhcpOptionWords[kw.Text] {
+		p.Errorf(kw.Pos, "unknown statement %q in %s", kw.Text, where)
+		return false
+	}
+	p.Next()
+	switch kw.Text {
 	case "router":
-		return p.addrList(kw, &d.Routers)
+		return p.addrList(kw, &o.Routers)
 	case "dns-server":
-		return p.addrList(kw, &d.DNSServers)
+		return p.addrList(kw, &o.DNSServers)
 	case "ntp-server":
-		return p.addrList(kw, &d.NTPServers)
+		return p.addrList(kw, &o.NTPServers)
 	case "domain":
 		v, ok := p.name()
-		return ok && once(p, kw, &d.Domain, v)
+		return ok && once(p, kw, &o.Domain, v)
 	case "search":
-		if d.Search != nil {
+		if o.Search != nil {
 			p.Errorf(kw.Pos, "%q given twice", kw.Text)
 			return false
 		}
 		return p.List(func() bool {
 			n, ok := p.name()
-			d.Search = append(d.Search, n)
+			o.Search = append(o.Search, n)
 			return ok
 		})
 	case "lease":
-		return p.durationValue(kw, &d.Lease, 1)
-	case "max-lease":
-		return p.durationValue(kw, &d.MaxLease, 1)
+		return p.durationValue(kw, &o.Lease, 1)
+	default: // max-lease
+		return p.durationValue(kw, &o.MaxLease, 1)
 	}
-	p.Errorf(kw.Pos, "unknown statement %q in dhcp block", kw.Text)
-	return false
 }

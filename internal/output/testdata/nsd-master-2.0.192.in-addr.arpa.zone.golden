@@ -12,3 +12,4 @@ $TTL 10800
 1                               PTR     example.com.
 2                           300 PTR     www.example.com.
 3                               PTR     mail.example.com.
+20                              PTR     tv.example.com.

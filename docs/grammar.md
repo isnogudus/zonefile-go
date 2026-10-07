@@ -118,9 +118,10 @@ mx            = "mx" name { mx-opt } .
 mx-opt        = "priority" NUMBER | "ttl" duration .
 
 zone          = "zone" name "{" NL { [ zone-stmt ] NL } "}" .
-zone-stmt     = setting | ptr | "no" "mx" | dhcp-switch | network
-              | nameserver | mx | host | cname | srv .
+zone-stmt     = setting | ptr | "no" "mx" | dhcp-switch | dhcp-profile
+              | network | nameserver | mx | host | cname | srv .
 dhcp-switch   = "dhcp" | "no" "dhcp" .
+dhcp-profile  = "dhcp-profile" name .
 
 network       = "network" net-list .
 
@@ -135,7 +136,8 @@ host-opt      = "alias" name-list
               | "no" "inet6"
               | "mac" mac-list
               | "dhcp"
-              | "no" "dhcp" .
+              | "no" "dhcp"
+              | "dhcp-profile" name .
 mac-list      = MAC | "{" MAC { [ "," ] MAC } "}" .
 
 cname         = "cname" name name [ "ttl" duration ] .
@@ -148,7 +150,9 @@ reverse-stmt  = setting | nameserver .
 
 dhcp          = "dhcp" NETWORK "{" NL { [ dhcp-stmt ] NL } "}" .
 dhcp-stmt     = "range" host-addr host-addr
-              | "router" host-addrs
+              | "profile" name "{" NL { [ dhcp-option ] NL } "}"
+              | dhcp-option .
+dhcp-option   = "router" host-addrs
               | "dns-server" host-addrs
               | "ntp-server" host-addrs
               | "domain" name
@@ -294,6 +298,7 @@ It is an error if
 ```
 host NAME ADDRESS|SUFFIX|{ … } [alias NAME|{ NAME … }] [ttl D]
      [no ptr] [no inet] [no inet6] [mac MAC|{ MAC … }] [[no] dhcp]
+     [dhcp-profile NAME]
 ```
 
 Creates one A or AAAA record per address. A suffix expands to one address
@@ -311,7 +316,9 @@ on for [dhcp](#dhcp): it then gets a fixed address there, for which it
 needs a `mac` and an IPv4 address in the network of a `dhcp` block.
 `dhcp` and `no dhcp` in a zone set the default for its hosts, with the
 ordering rule of the settings; without either, dhcp is off. In a zone with
-`dhcp`, hosts without a `mac` are simply left out.
+`dhcp`, hosts without a `mac` are simply left out. `dhcp-profile` puts the
+host into a profile of its dhcp block (see [dhcp](#dhcp)); in a zone it is
+the default for its hosts.
 
 ### cname
 
@@ -379,6 +386,34 @@ Addresses may be suffixes relative to its network.
 | `search`     | `option domain-search`               |
 | `lease`      | `default-lease-time`                 |
 | `max-lease`  | `max-lease-time`                     |
+
+#### Profiles
+
+```
+dhcp 192.168.21.0/24 {
+	dns-server .1
+	profile kids {
+		dns-server .53
+	}
+}
+
+zone example.com {
+	host tv .20 mac 00:00:5e:00:53:20 dhcp dhcp-profile kids
+}
+```
+
+A `profile` in a dhcp block holds options for some of its hosts: the
+statements of the block except `range`, with suffixes of its network.
+Hosts and zones name it with `dhcp-profile`; a host gets the profile of the
+dhcp block that holds its address, so blocks may define profiles of the
+same name with different values. In `dhcpd.conf` each profile that is used
+becomes a `group` inside the subnet, whose options override those of the
+subnet for its hosts.
+
+`dhcp-profile` rests like a `mac` while dhcp is off for the host. It is an
+error if dhcp is on and the dhcp block has no such profile, and a warning
+if dhcp is off and no dhcp block defines the name at all, to catch typing
+errors early.
 
 Every host with `dhcp` on and a `mac` gets a host declaration in the
 subnet that holds

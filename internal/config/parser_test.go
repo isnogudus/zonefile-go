@@ -378,3 +378,56 @@ func TestParseDHCPErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestParseDHCPProfiles(t *testing.T) {
+	cfg := mustParse(t, `
+dhcp 192.168.21.0/24 {
+	dns-server .1
+	profile kids {
+		dns-server .53
+		lease 1h
+	}
+	profile iot {
+		router .254
+	}
+}
+zone example.com {
+	dhcp-profile iot
+	host tv .20 mac 00:00:5e:00:53:20 dhcp dhcp-profile kids
+}
+`)
+	d := cfg.DHCP[0]
+	if len(d.Profiles) != 2 || d.Profiles[0].Name != "kids" || len(d.Profiles[0].DNSServers) != 1 ||
+		*d.Profiles[0].Lease != 3600 || d.Profiles[1].Routers[0].Suffix[0] != 254 {
+		t.Errorf("profiles = %+v", d.Profiles)
+	}
+	z := cfg.Zones[0]
+	if p := z.Options.DHCPProfile; p == nil || *p != "iot" {
+		t.Errorf("zone profile = %v", p)
+	}
+	if p := z.Hosts[0].DHCPProfile; p == nil || *p != "kids" {
+		t.Errorf("host profile = %v", p)
+	}
+}
+
+func TestParseDHCPProfileErrors(t *testing.T) {
+	tests := []struct {
+		name, src, want string
+	}{
+		{"duplicate", "dhcp 10.0.0.0/8 {\n\tprofile a {\n\t}\n\tprofile a {\n\t}\n}\n", `test.conf:4: profile "a" already defined at test.conf:2`},
+		{"range in profile", "dhcp 10.0.0.0/8 {\n\tprofile a {\n\t\trange .1 .2\n\t}\n}\n", `test.conf:3: unknown statement "range" in profile`},
+		{"profile at top level", "profile a {\n}\n", `test.conf:1: "profile" is only allowed in a dhcp block`},
+		{"profile in zone", "zone a {\n\tprofile b {\n\t}\n}\n", `test.conf:2: "profile" is only allowed in a dhcp block`},
+		{"dhcp-profile at top level", "dhcp-profile a\n", `test.conf:1: "dhcp-profile" is only allowed in a zone or on a host; profiles are defined in dhcp blocks`},
+		{"dhcp-profile after record", "zone a {\n\thost x 10.0.0.1\n\tdhcp-profile b\n}\n", `test.conf:3: "dhcp-profile" must come before the first record`},
+		{"dhcp-profile twice", "zone a {\n\thost x 10.0.0.1 dhcp-profile b dhcp-profile c\n}\n", `test.conf:2: "dhcp-profile" given twice`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Parse("test.conf", strings.NewReader(tt.src))
+			if err == nil || err.Error() != tt.want {
+				t.Errorf("err = %v\nwant  %s", err, tt.want)
+			}
+		})
+	}
+}
