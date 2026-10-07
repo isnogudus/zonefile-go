@@ -15,7 +15,7 @@ MANPAGES = zonefile-go.8 zonefile.conf.5
 DIST_ARCH ?= amd64
 DISTDIR = dist
 DIST_NAME = zonefile-go-$(VERSION)-$(DIST_OS)-$(DIST_ARCH)
-DIST_STAGE = $(DISTDIR)/$(DIST_NAME)
+DIST_STAGE = $(DISTDIR)/.stage-$(DIST_NAME)
 # Files in the archive belong to root, whatever tar packs them.
 DIST_OWNER = $(shell tar --version 2>/dev/null | grep -q bsdtar && \
 	echo --uid 0 --gid 0 --uname root --gname wheel --no-xattrs || \

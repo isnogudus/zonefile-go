@@ -37,6 +37,20 @@ jobs:
           done
           cp zonefile-go.8 zonefile.conf.5 dist/
           cp examples/zones.conf dist/zonefile.conf.example
+      - name: archives for /usr/local
+        run: |
+          for os in openbsd freebsd; do
+            for arch in amd64 arm64; do
+              make dist-$os DIST_ARCH=$arch VERSION="$TAG"
+            done
+          done
+          # Every file in the archives must belong to root.
+          for f in dist/*.tgz; do
+            bad=$(tar -tvzf "$f" | awk '$2 != "0/0" && $2 != "root/root" && $2 != "root/wheel"')
+            if [ -n "$bad" ]; then
+              echo "$f: files not owned by root:"; echo "$bad"; exit 1
+            fi
+          done
           (cd dist && sha256sum * > SHA256SUMS)
       - name: release
         env:
@@ -44,4 +58,4 @@ jobs:
         run: |
           gh release create "$TAG" dist/* \
             --title "$TAG" \
-            --notes "Static binaries for OpenBSD, FreeBSD and Linux, the manual pages zonefile-go(8) and zonefile.conf(5), and an example configuration. Verify with SHA256SUMS."
+            --notes "Archives for OpenBSD and FreeBSD with the binary, the manual pages and the example configuration, to unpack with tar -xzf FILE -C /usr/local. Also static binaries for OpenBSD, FreeBSD and Linux, the manual pages zonefile-go(8) and zonefile.conf(5), and an example configuration. Verify with SHA256SUMS."
