@@ -21,7 +21,7 @@ var version = "dev"
 
 func usage() {
 	fmt.Fprintf(os.Stderr,
-		"usage: %s [-nV] [-f file] [-o path] [-s serialfile] [-t unbound|nsd]\n",
+		"usage: %s [-nV] [-f file] [-o path] [-s serialfile] [-t unbound|nsd|dhcpd]\n",
 		os.Args[0])
 	os.Exit(1)
 }
@@ -35,9 +35,9 @@ func main() {
 	var (
 		file       = flag.String("f", defaultConfig, "configuration file, - for stdin")
 		checkOnly  = flag.Bool("n", false, "check the configuration only")
-		outPath    = flag.String("o", "", "output file (unbound, default stdout) or directory (nsd, default nsd)")
+		outPath    = flag.String("o", "", "output file (unbound, dhcpd; default stdout) or directory (nsd, default nsd)")
 		serialFile = flag.String("s", "/var/db/zonefile-go.serial", "file with the serial and hash of each zone")
-		format     = flag.String("t", "unbound", "output format: unbound or nsd")
+		format     = flag.String("t", "unbound", "output format: unbound, nsd or dhcpd")
 		showVer    = flag.Bool("V", false, "print version and exit")
 	)
 	flag.Usage = usage
@@ -52,7 +52,7 @@ func main() {
 	}
 
 	switch *format {
-	case "unbound", "nsd":
+	case "unbound", "nsd", "dhcpd":
 	default:
 		fmt.Fprintf(os.Stderr, "zonefile-go: unknown output format %q\n", *format)
 		os.Exit(1)
@@ -62,15 +62,27 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
-	zones, warnings, err := zone.Resolve(cfg)
-	for _, w := range warnings {
+	res, err := zone.Resolve(cfg)
+	for _, w := range res.Warnings {
 		fmt.Fprintln(os.Stderr, w)
 	}
 	if err != nil {
 		fatal(err)
 	}
+	zones := res.Zones
 	if *checkOnly {
 		fmt.Fprintln(os.Stderr, "configuration OK")
+		return
+	}
+
+	// dhcpd needs no serials, so the serial file is left alone.
+	if *format == "dhcpd" {
+		if len(res.DHCP) == 0 {
+			fatal(fmt.Errorf("%s: no dhcp blocks", *file))
+		}
+		if err := writeFile(*outPath, output.Dhcpd(res.DHCP)); err != nil {
+			fatal(err)
+		}
 		return
 	}
 
@@ -82,12 +94,7 @@ func main() {
 
 	switch *format {
 	case "unbound":
-		data := output.Unbound(zones)
-		if *outPath == "" {
-			_, err = os.Stdout.Write(data)
-		} else {
-			err = atomicfile.WriteFile(*outPath, data, 0o644)
-		}
+		err = writeFile(*outPath, output.Unbound(zones))
 	case "nsd":
 		dir := *outPath
 		if dir == "" {
@@ -107,4 +114,14 @@ func main() {
 	if err := serial.Save(*serialFile, state); err != nil {
 		fatal(err)
 	}
+}
+
+// writeFile writes data atomically to path, or to standard output if path
+// is empty.
+func writeFile(path string, data []byte) error {
+	if path == "" {
+		_, err := os.Stdout.Write(data)
+		return err
+	}
+	return atomicfile.WriteFile(path, data, 0o644)
 }

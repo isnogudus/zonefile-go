@@ -62,9 +62,23 @@ type ptrCandidate struct {
 }
 
 type resolver struct {
-	cfg   *config.Config
-	errs  config.ErrorList
-	warns config.ErrorList
+	cfg       *config.Config
+	errs      config.ErrorList
+	warns     config.ErrorList
+	dhcpHosts []dhcpHost
+	// macs maps every MAC address to the host that gives it.
+	macs map[string]config.Pos
+}
+
+// Result is a resolved configuration.
+type Result struct {
+	// Zones are the forward zones in configuration order, followed by the
+	// reverse zones.
+	Zones []*Zone
+	// DHCP are the subnets of the dhcp blocks, in configuration order.
+	DHCP []*Subnet
+	// Warnings do not stop the output from being written.
+	Warnings config.ErrorList
 }
 
 func (r *resolver) errorf(pos config.Pos, format string, args ...any) {
@@ -107,12 +121,11 @@ func (r *resolver) owner(pos config.Pos, what, name, origin string) (string, boo
 	return abs, true
 }
 
-// Resolve builds the forward zones of cfg, in configuration order,
-// followed by its reverse zones. It also returns warnings, which do not
-// stop the zones from being built. On failure the error is a
-// config.ErrorList with every problem found.
-func Resolve(cfg *config.Config) ([]*Zone, config.ErrorList, error) {
-	r := &resolver{cfg: cfg}
+// Resolve builds the zones and dhcp subnets of cfg. On failure the error
+// is a config.ErrorList with every problem found; the warnings are
+// returned in either case.
+func Resolve(cfg *config.Config) (*Result, error) {
+	r := &resolver{cfg: cfg, macs: map[string]config.Pos{}}
 	global := defaults().with(cfg.Options)
 
 	var zones []*Zone
@@ -133,11 +146,13 @@ func Resolve(cfg *config.Config) ([]*Zone, config.ErrorList, error) {
 		ptrs = append(ptrs, cands...)
 	}
 	zones = append(zones, r.reverse(global, ptrs)...)
+	subnets := r.dhcp(r.dhcpHosts)
 
+	res := &Result{Zones: zones, DHCP: subnets, Warnings: r.warns}
 	if len(r.errs) > 0 {
-		return nil, r.warns, r.errs
+		return &Result{Warnings: r.warns}, r.errs
 	}
-	return zones, r.warns, nil
+	return res, nil
 }
 
 func (r *resolver) soa(pos config.Pos, name string, s settings) SOA {
@@ -310,6 +325,8 @@ func (r *resolver) host(z *Zone, cz *config.Zone, h config.Host, s settings, own
 		ptr = false
 	}
 
+	r.hostDHCP(cz, h, name, addrs)
+
 	var ptrs []ptrCandidate
 	for _, addr := range addrs {
 		for _, owner := range append([]string{name}, aliases...) {
@@ -424,4 +441,43 @@ func (r *resolver) reverse(global settings, cands []ptrCandidate) []*Zone {
 		zones[i] = rz.zone
 	}
 	return zones
+}
+
+// hostDHCP checks the MAC addresses of a host and, if dhcp is on for it,
+// collects it for the dhcp subnets. dhcp on the host overrides the zone,
+// and is off unless one of them turns it on.
+func (r *resolver) hostDHCP(cz *config.Zone, h config.Host, name string, addrs []netip.Addr) {
+	if len(h.MACs) > 0 && strings.HasPrefix(name, "*") {
+		r.errorf(h.Pos, "host %s: a wildcard cannot have a mac", name)
+		return
+	}
+	for _, mac := range h.MACs {
+		if pos, dup := r.macs[mac]; dup {
+			r.errorf(h.Pos, "host %s: MAC address %s already used at %s", name, mac, pos)
+		}
+		r.macs[mac] = h.Pos
+	}
+
+	on := false
+	override(&on, cz.Options.DHCP)
+	override(&on, h.DHCP)
+	switch {
+	case h.DHCP != nil && *h.DHCP && len(h.MACs) == 0:
+		r.errorf(h.Pos, "host %s: dhcp needs a mac", name)
+		return
+	case !on || len(h.MACs) == 0:
+		return
+	}
+
+	var v4 []netip.Addr
+	for _, a := range addrs {
+		if a.Is4() {
+			v4 = append(v4, a)
+		}
+	}
+	if len(v4) == 0 {
+		r.errorf(h.Pos, "host %s: dhcp needs an IPv4 address", name)
+		return
+	}
+	r.dhcpHosts = append(r.dhcpHosts, dhcpHost{pos: h.Pos, name: name, addrs: v4, macs: h.MACs})
 }

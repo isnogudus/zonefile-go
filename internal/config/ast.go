@@ -23,6 +23,7 @@ type Config struct {
 	MX          []MX
 	Zones       []*Zone
 	Reverse     []*Reverse
+	DHCP        []*DHCP
 }
 
 // Options holds the settings of one scope: email, ttl and the other SOA
@@ -36,6 +37,8 @@ type Options struct {
 	NegativeTTL *uint32
 	Serial      *uint32
 	PTR         *bool
+	// DHCP is set by dhcp and no dhcp, which exist only in zones.
+	DHCP *bool
 }
 
 type Nameserver struct {
@@ -86,6 +89,10 @@ type Host struct {
 	PTR     *bool
 	NoInet  bool
 	NoInet6 bool
+	// MACs are the hardware addresses given with mac, in lower case.
+	MACs []string
+	// DHCP is set by dhcp and no dhcp on the host.
+	DHCP *bool
 }
 
 type CNAME struct {
@@ -110,4 +117,25 @@ type Reverse struct {
 	Networks    []netip.Prefix
 	Options     Options
 	Nameservers []Nameserver
+}
+
+// DHCP is a dhcp block: the settings of one IPv4 subnet for dhcpd. Addresses
+// may be suffixes, resolved against Network.
+type DHCP struct {
+	Pos        Pos
+	Network    netip.Prefix
+	Ranges     []DHCPRange
+	Routers    []HostAddr
+	DNSServers []HostAddr
+	NTPServers []HostAddr
+	Domain     *string
+	Search     []string
+	Lease      *uint32
+	MaxLease   *uint32
+}
+
+// DHCPRange is a range of addresses that dhcpd hands out dynamically.
+type DHCPRange struct {
+	Pos       Pos
+	Low, High HostAddr
 }

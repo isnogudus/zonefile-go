@@ -1,7 +1,9 @@
 # zonefile-go
 
 A DNS zone file generator written in Go. Reads a configuration file in an
-OpenBSD-style syntax and generates zone data for Unbound or NSD.
+OpenBSD-style syntax and generates zone data for Unbound or NSD, and the
+`dhcpd.conf` for the dhcpd of OpenBSD, so that names, addresses and MAC
+addresses are kept in one place.
 
 It is the successor of [zonefile](https://github.com/isnogudus/zonefile)
 (Python) and [zonefile-rs](https://github.com/isnogudus/zonefile-rs)
@@ -42,7 +44,7 @@ A larger example is in [examples/zones.conf](examples/zones.conf).
 ## Usage
 
 ```
-zonefile-go [-nV] [-f file] [-o path] [-s serialfile] [-t unbound|nsd]
+zonefile-go [-nV] [-f file] [-o path] [-s serialfile] [-t unbound|nsd|dhcpd]
 ```
 
 ```
@@ -55,6 +57,25 @@ With `-t nsd`, zone files of zones that were removed from the configuration
 are deleted from `master/`. Only files named in the previous `zones.conf`
 are considered, so zone files maintained by hand in the same directory are
 left alone.
+
+With `-t dhcpd`, zonefile-go writes a complete `dhcpd.conf` from the `dhcp`
+blocks of the configuration, with a fixed address for every host with a
+`mac` that turns on `dhcp`, on the host or for its whole zone:
+
+```
+dhcp 192.168.21.0/24 {
+	range .100 .199
+	router .1
+	dns-server .1
+	domain example.com
+	lease 1d
+}
+
+zone example.com {
+	network 192.168.21.0/24
+	host printer .12 mac 00:00:5e:00:53:12 dhcp
+}
+```
 
 A zone gets a new SOA serial only when its content changes: the serial
 file (default `/var/db/zonefile-go.serial`) keeps the serial of each zone

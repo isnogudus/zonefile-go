@@ -3,6 +3,7 @@ package output
 import (
 	"bytes"
 	"flag"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,11 +21,11 @@ func loadZones(t *testing.T) []*zone.Zone {
 	if err != nil {
 		t.Fatal(err)
 	}
-	zones, _, err := zone.Resolve(cfg)
+	res, err := zone.Resolve(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return zones
+	return res.Zones
 }
 
 func golden(t *testing.T, name string, got []byte) {
@@ -175,5 +176,28 @@ zone:
 	}
 	if len(got) != 1 || got[0] != "master/a.zone" {
 		t.Errorf("got %v, want [master/a.zone]", got)
+	}
+}
+
+func TestDhcpd(t *testing.T) {
+	cfg, err := config.ParseFile("testdata/small.conf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := zone.Resolve(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	golden(t, "dhcpd", Dhcpd(res.DHCP))
+}
+
+func TestNetmask(t *testing.T) {
+	for pfx, want := range map[string]string{
+		"0.0.0.0/0": "0.0.0.0", "10.0.0.0/8": "255.0.0.0", "10.0.16.0/20": "255.255.240.0",
+		"192.0.2.0/24": "255.255.255.0", "192.0.2.4/30": "255.255.255.252", "192.0.2.1/32": "255.255.255.255",
+	} {
+		if got := netmask(netip.MustParsePrefix(pfx)).String(); got != want {
+			t.Errorf("netmask(%s) = %s, want %s", pfx, got, want)
+		}
 	}
 }

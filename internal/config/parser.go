@@ -16,9 +16,11 @@ import (
 const maxDuration = math.MaxInt32 * time.Second
 
 var keywords = []string{
-	"alias", "cname", "email", "expire", "host", "inet", "inet6", "mx",
-	"nameserver", "network", "no", "port", "priority", "ptr", "refresh",
-	"retry", "reverse", "serial", "set", "srv", "ttl", "weight", "yes", "zone",
+	"alias", "cname", "dhcp", "dns-server", "domain", "email", "expire",
+	"host", "inet", "inet6", "lease", "mac", "max-lease", "mx", "nameserver",
+	"network", "no", "ntp-server", "port", "priority", "ptr", "range",
+	"refresh", "retry", "reverse", "router", "search", "serial", "set", "srv",
+	"ttl", "weight", "yes", "zone",
 }
 
 // blockState tracks statement order inside a zone or reverse block.
@@ -86,6 +88,9 @@ func (p *parser) topLevel() bool {
 	case "reverse":
 		p.seenBlock = true
 		return p.reverse()
+	case "dhcp":
+		p.seenBlock = true
+		return p.dhcp()
 	}
 	return p.unknown("")
 }
@@ -184,14 +189,19 @@ func (p *parser) setting(o *Options, ptr bool, mx *bool) bool {
 		}
 		*mx = true
 		return true
+	case mx != nil && p.Accept("dhcp"):
+		return once(p, n, &o.DHCP, false)
 	case n.Kind == obsdconf.Word && n.Text == "mx" && ptr:
 		p.Errorf(n.Pos, `"no mx" is only allowed in a zone`)
 		return false
-	case n.Kind == obsdconf.Word && (n.Text == "ptr" || n.Text == "mx"):
+	case n.Kind == obsdconf.Word && n.Text == "dhcp" && ptr:
+		p.Errorf(n.Pos, `"no dhcp" is only allowed in a zone or on a host`)
+		return false
+	case n.Kind == obsdconf.Word && (n.Text == "ptr" || n.Text == "mx" || n.Text == "dhcp"):
 		p.Errorf(n.Pos, "%q is not allowed in a reverse block", "no "+n.Text)
 		return false
 	case mx != nil:
-		return p.Expected(`"ptr" or "mx" after "no"`)
+		return p.Expected(`"ptr", "mx" or "dhcp" after "no"`)
 	}
 	return p.Expected(`"ptr" after "no"`)
 }
@@ -410,6 +420,15 @@ func (p *parser) zone() bool {
 
 func (p *parser) zoneStmt(z *Zone, st *blockState) bool {
 	t := p.Tok()
+	if t.Text == "dhcp" {
+		// A switch like ptr; at top level dhcp opens a block instead.
+		if st.records {
+			p.Errorf(t.Pos, `"dhcp" must come before the first record`)
+			return false
+		}
+		p.Next()
+		return once(p, t, &z.Options.DHCP, true)
+	}
 	if p.isSetting() {
 		isMX := p.Is("no", "mx")
 		if st.records && !isMX {
@@ -517,6 +536,18 @@ func (p *parser) host() (Host, bool) {
 				h.Aliases = append(h.Aliases, n)
 				return ok
 			})
+		case "dhcp":
+			ok = once(p, kw, &h.DHCP, true)
+		case "mac":
+			if h.MACs != nil {
+				p.Errorf(kw.Pos, "%q given twice", kw.Text)
+				return h, false
+			}
+			ok = p.List(func() bool {
+				m, ok := p.mac()
+				h.MACs = append(h.MACs, m)
+				return ok
+			})
 		case "ttl":
 			ok = p.durationValue(kw, &h.TTL, 1)
 		case "ptr":
@@ -539,15 +570,17 @@ func (p *parser) host() (Host, bool) {
 }
 
 func (p *parser) hostNo(h *Host) bool {
-	const what = `"ptr", "inet" or "inet6" after "no"`
+	const what = `"ptr", "dhcp", "inet" or "inet6" after "no"`
 	t := p.Tok()
-	if _, ok := p.Enum(what, "ptr", "inet", "inet6"); !ok {
+	if _, ok := p.Enum(what, "ptr", "dhcp", "inet", "inet6"); !ok {
 		return false
 	}
 	var flag *bool
 	switch t.Text {
 	case "ptr":
 		return once(p, t, &h.PTR, false)
+	case "dhcp":
+		return once(p, t, &h.DHCP, false)
 	case "inet":
 		flag = &h.NoInet
 	case "inet6":
@@ -673,4 +706,103 @@ func (p *parser) reverseStmt(r *Reverse, st *blockState) bool {
 		return ok
 	}
 	return p.unknown(" in reverse block")
+}
+
+// mac parses an Ethernet address of six hexadecimal octets separated by
+// colons and returns it in lower case.
+func (p *parser) mac() (string, bool) {
+	t := p.Tok()
+	s, ok := p.Word("MAC address")
+	if !ok {
+		return "", false
+	}
+	octets := strings.Split(s, ":")
+	valid := len(octets) == 6
+	for _, o := range octets {
+		if len(o) != 2 || strings.Trim(strings.ToLower(o), "0123456789abcdef") != "" {
+			valid = false
+		}
+	}
+	if !valid {
+		p.Errorf(t.Pos, "invalid MAC address %q, expected six octets such as 00:00:5e:00:53:01", s)
+		return "", false
+	}
+	return strings.ToLower(s), true
+}
+
+// addrList parses an address, suffix or list of them into dst.
+func (p *parser) addrList(kw obsdconf.Token, dst *[]HostAddr) bool {
+	if *dst != nil {
+		p.Errorf(kw.Pos, "%q given twice", kw.Text)
+		return false
+	}
+	return p.List(func() bool {
+		a, ok := p.hostAddr()
+		*dst = append(*dst, a)
+		return ok
+	})
+}
+
+func (p *parser) dhcp() bool {
+	d := &DHCP{Pos: p.Tok().Pos}
+	p.Next()
+	pfx, ok := p.Prefix()
+	if !ok {
+		return false
+	}
+	if !pfx.Addr().Is4() {
+		p.Errorf(d.Pos, "dhcp %s: dhcpd serves IPv4 networks only", pfx)
+		return false
+	}
+	d.Network = pfx
+	p.cfg.DHCP = append(p.cfg.DHCP, d)
+	if p.Tok().Kind != obsdconf.LBrace {
+		return p.Expected(`"{"`)
+	}
+	return p.Block(fmt.Sprintf("dhcp %s", pfx), func() bool {
+		return p.dhcpStmt(d)
+	})
+}
+
+func (p *parser) dhcpStmt(d *DHCP) bool {
+	kw := p.Tok()
+	p.Next()
+	switch kw.Text {
+	case "range":
+		r := DHCPRange{Pos: kw.Pos}
+		var ok bool
+		if r.Low, ok = p.hostAddr(); !ok {
+			return false
+		}
+		if r.High, ok = p.hostAddr(); !ok {
+			return false
+		}
+		d.Ranges = append(d.Ranges, r)
+		return true
+	case "router":
+		return p.addrList(kw, &d.Routers)
+	case "dns-server":
+		return p.addrList(kw, &d.DNSServers)
+	case "ntp-server":
+		return p.addrList(kw, &d.NTPServers)
+	case "domain":
+		v, ok := p.name()
+		return ok && once(p, kw, &d.Domain, v)
+	case "search":
+		if d.Search != nil {
+			p.Errorf(kw.Pos, "%q given twice", kw.Text)
+			return false
+		}
+		return p.List(func() bool {
+			n, ok := p.name()
+			d.Search = append(d.Search, n)
+			return ok
+		})
+	case "lease":
+		return p.durationValue(kw, &d.Lease, 1)
+	case "max-lease":
+		return p.durationValue(kw, &d.MaxLease, 1)
+	}
+	p.Errorf(kw.Pos, "unknown statement %q in dhcp block", kw.Text)
+	return false
 }

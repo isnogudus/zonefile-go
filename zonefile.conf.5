@@ -1,4 +1,4 @@
-.Dd October 6, 2026
+.Dd October 7, 2026
 .Dt ZONEFILE.CONF 5
 .Os
 .Sh NAME
@@ -6,10 +6,12 @@
 .Nd zonefile-go configuration file
 .Sh DESCRIPTION
 .Nm
-describes forward zones, their hosts and records, and the networks for
+describes forward zones, their hosts and records, the networks for
 which
 .Xr zonefile-go 8
-generates reverse zones.
+generates reverse zones, and the subnets it writes a
+.Xr dhcpd.conf 5
+for.
 .Pp
 The file usually has these sections, in this order:
 .Bl -tag -width xxxx
@@ -19,6 +21,9 @@ User-defined variables that may be used later in the file.
 Defaults for all zones, and default nameservers and mail exchangers.
 .It Sy Reverse zones
 The networks for which PTR records are served.
+.It Sy DHCP
+The IPv4 subnets served by
+.Xr dhcpd 8 .
 .It Sy Zones
 The forward zones with their hosts, aliases and records.
 .El
@@ -196,6 +201,18 @@ A zone may contain:
 .It Ic email , ttl , refresh , retry , expire , negative-ttl , serial
 .It Oo Ic no Oc Ic ptr
 As in the global configuration.
+.It Oo Ic no Oc Ic dhcp
+Whether hosts of the zone with a
+.Ic mac
+get a fixed address in the
+.Xr dhcpd.conf 5 ,
+see
+.Sx DHCP ;
+by default they do not.
+Hosts without a
+.Ic mac
+are left out.
+Like the settings, it must come before the first record.
 .It Ic no mx
 The zone has no MX records, not even the top-level ones.
 Not allowed together with
@@ -218,6 +235,8 @@ The default priority is 0, here and at top level.
 .Op Oo Ic no Oc Ic ptr
 .Op Ic no inet
 .Op Ic no inet6
+.Op Ic mac Ar address | { address ... }
+.Op Oo Ic no Oc Ic dhcp
 .Xc
 Create one A or AAAA record per address.
 An address is a full IPv4 or IPv6 address, or a suffix such as
@@ -245,6 +264,25 @@ and
 .Ic no ptr
 override the setting of the zone for this host.
 Wildcard hosts never get PTR records.
+.Pp
+.Ic mac
+records the MAC addresses of the host, written as six hexadecimal octets
+such as 00:00:5e:00:53:01; each may be used only once in the
+configuration.
+On its own it changes no output.
+.Ic dhcp
+and
+.Ic no dhcp
+override the setting of the zone for this host.
+With
+.Ic dhcp ,
+the host gets a fixed address in the
+.Ic dhcp
+block whose network holds its IPv4 address, see
+.Sx DHCP ;
+it needs a
+.Ic mac ,
+and it is an error if there is no such block.
 .It Ic cname Ar name target Op Ic ttl Ar duration
 A CNAME record.
 Its name must not be used by any other record of the zone.
@@ -271,6 +309,63 @@ Within a zone, a host must not be declared twice, and the same name with
 the same address must not result twice.
 Two hosts producing a PTR record for the same address in a reverse zone is
 an error as well.
+.Sh DHCP
+.Bl -tag -width Ds
+.It Ic dhcp Ar network No { ... }
+Describe an IPv4 subnet for
+.Xr dhcpd 8 .
+.Xr zonefile-go 8
+writes the complete
+.Xr dhcpd.conf 5
+from these blocks with
+.Fl t Cm dhcpd .
+Addresses in the block may be suffixes relative to
+.Ar network .
+Subnets must not overlap.
+The block may contain:
+.Bl -tag -width Ds
+.It Ic range Ar low high
+A range of addresses handed out dynamically.
+It may be given several times; ranges must lie within the network and
+must not overlap.
+.It Ic router Ar address | { address ... }
+.Ic option routers ;
+the addresses must lie within the network.
+.It Ic dns-server Ar address | { address ... }
+.Ic option domain-name-servers .
+.It Ic ntp-server Ar address | { address ... }
+.Ic option ntp-servers .
+.It Ic domain Ar name
+.Ic option domain-name .
+.It Ic search Ar name | { name ... }
+.Ic option domain-search .
+.It Ic lease Ar duration
+.Ic default-lease-time .
+.It Ic max-lease Ar duration
+.Ic max-lease-time ;
+.Ic lease
+must not be longer.
+.El
+.Pp
+Every host with a
+.Ic mac
+and
+.Ic dhcp
+on, given on the host or in its zone, gets a host declaration in the subnet that holds its IPv4 address, with
+.Ic hardware ethernet ,
+.Ic fixed-address
+and
+.Ic option host-name
+set to the first label of its name.
+A host with several MAC addresses gets one declaration per address; the
+further ones are named
+.Ar name Ns -2 ,
+.Ar name Ns -3
+and so on.
+It is an error if such a host has no IPv4 address in the network of a
+.Ic dhcp
+block, or if its fixed address lies in a dynamic range.
+.El
 .Sh FILES
 .Bl -tag -width Ds
 .It Pa /etc/zonefile.conf
@@ -287,13 +382,21 @@ nameserver ns1.example.com.
 
 reverse { 192.168.1.0/24 fd00:1::/64 }
 
+dhcp 192.168.1.0/24 {
+	range .100 .199
+	router .1
+	dns-server .1
+	domain example.com
+	lease 1d
+}
+
 zone example.com {
 	network $lan
 	mx mail priority 10
 
 	host router .1 alias { @ ns1 www }
 	host mail   .3
-	host printer .12 no inet6
+	host printer .12 no inet6 mac 00:00:5e:00:53:12 dhcp
 	host gateway 203.0.113.1 no ptr
 
 	cname webmail mail
@@ -301,5 +404,7 @@ zone example.com {
 }
 .Ed
 .Sh SEE ALSO
+.Xr dhcpd.conf 5 ,
 .Xr pf.conf 5 ,
+.Xr dhcpd 8 ,
 .Xr zonefile-go 8

@@ -98,7 +98,7 @@ EBNF. Terminals are quoted. `NL` is a newline that ends a statement.
 ```
 config        = { [ toplevel ] NL } .
 toplevel      = macro | include | setting | ptr | nameserver | mx | zone
-              | reverse .
+              | reverse | dhcp .
 
 macro         = MACRONAME "=" value .
 include       = "include" STRING .
@@ -118,8 +118,9 @@ mx            = "mx" name { mx-opt } .
 mx-opt        = "priority" NUMBER | "ttl" duration .
 
 zone          = "zone" name "{" NL { [ zone-stmt ] NL } "}" .
-zone-stmt     = setting | ptr | "no" "mx" | network | nameserver | mx
-              | host | cname | srv .
+zone-stmt     = setting | ptr | "no" "mx" | dhcp-switch | network
+              | nameserver | mx | host | cname | srv .
+dhcp-switch   = "dhcp" | "no" "dhcp" .
 
 network       = "network" net-list .
 
@@ -131,7 +132,11 @@ host-opt      = "alias" name-list
               | "ptr"
               | "no" "ptr"
               | "no" "inet"
-              | "no" "inet6" .
+              | "no" "inet6"
+              | "mac" mac-list
+              | "dhcp"
+              | "no" "dhcp" .
+mac-list      = MAC | "{" MAC { [ "," ] MAC } "}" .
 
 cname         = "cname" name name [ "ttl" duration ] .
 
@@ -141,6 +146,16 @@ srv-opt       = "priority" NUMBER | "weight" NUMBER | "ttl" duration .
 reverse       = "reverse" net-list [ "{" NL { [ reverse-stmt ] NL } "}" ] .
 reverse-stmt  = setting | nameserver .
 
+dhcp          = "dhcp" NETWORK "{" NL { [ dhcp-stmt ] NL } "}" .
+dhcp-stmt     = "range" host-addr host-addr
+              | "router" host-addrs
+              | "dns-server" host-addrs
+              | "ntp-server" host-addrs
+              | "domain" name
+              | "search" name-list
+              | "lease" duration
+              | "max-lease" duration .
+
 addr-list     = ADDRESS | "{" ADDRESS { [ "," ] ADDRESS } "}" .
 name-list     = name    | "{" name    { [ "," ] name    } "}" .
 net-list      = NETWORK | "{" NETWORK { [ "," ] NETWORK } "}" .
@@ -149,6 +164,7 @@ name          = WORD | STRING .
 value         = WORD | STRING | "{" item { [ "," ] item } "}" .
 duration      = NUMBER [ "s" | "m" | "h" | "d" | "w" ] .
 SUFFIX        = "." OCTET { "." OCTET } .
+MAC           = HEX HEX ":" HEX HEX ":" HEX HEX ":" HEX HEX ":" HEX HEX ":" HEX HEX .
 ```
 
 The opening `{` of a block has to be on the same line as its keyword.
@@ -277,7 +293,7 @@ It is an error if
 
 ```
 host NAME ADDRESS|SUFFIX|{ … } [alias NAME|{ NAME … }] [ttl D]
-     [no ptr] [no inet] [no inet6]
+     [no ptr] [no inet] [no inet6] [mac MAC|{ MAC … }] [[no] dhcp]
 ```
 
 Creates one A or AAAA record per address. A suffix expands to one address
@@ -288,6 +304,14 @@ addresses as additional A/AAAA records**, not CNAMEs, which matches
 `zonefile-rs`. Only the host name itself gets a PTR record; aliases do
 not. `no ptr` and `ptr` override the `ptr` or `no ptr` of the zone for
 this host.
+
+`mac` records the MAC addresses of the host; each may be used only once in
+the configuration. On its own it changes no output. `dhcp` turns the host
+on for [dhcp](#dhcp): it then gets a fixed address there, for which it
+needs a `mac` and an IPv4 address in the network of a `dhcp` block.
+`dhcp` and `no dhcp` in a zone set the default for its hosts, with the
+ordering rule of the settings; without either, dhcp is off. In a zone with
+`dhcp`, hosts without a `mac` are simply left out.
 
 ### cname
 
@@ -324,6 +348,54 @@ purpose: `reverse` lists exactly the address ranges for which reverse
 records are served. A host with an external address (say, a public
 gateway address in a forward zone) therefore never produces a PTR in a zone
 that is not ours, even without `no ptr`.
+
+### dhcp
+
+```
+dhcp 192.168.21.0/24 {
+	range .100 .199
+	router .1
+	dns-server .1
+	domain example.com
+	search { example.com apps.example.com }
+	ntp-server .1
+	lease 1d
+	max-lease 7d
+}
+```
+
+Describes one IPv4 subnet for the `dhcpd(8)` of OpenBSD, written with
+`-t dhcpd` as a complete `dhcpd.conf(5)`. A `dhcp` block stands at top
+level beside the zones, since several zones may share a network.
+Addresses may be suffixes relative to its network.
+
+| Statement    | In `dhcpd.conf`                      |
+|--------------|--------------------------------------|
+| `range`      | `range` of dynamic addresses; may be given several times |
+| `router`     | `option routers`                     |
+| `dns-server` | `option domain-name-servers`         |
+| `ntp-server` | `option ntp-servers`                 |
+| `domain`     | `option domain-name`                 |
+| `search`     | `option domain-search`               |
+| `lease`      | `default-lease-time`                 |
+| `max-lease`  | `max-lease-time`                     |
+
+Every host with `dhcp` on and a `mac` gets a host declaration in the
+subnet that holds
+its IPv4 address: `hardware ethernet`, `fixed-address` and `option
+host-name` with the first label of its name. A host with several MAC
+addresses gets one declaration per address, the further ones named
+`name-2`, `name-3`, ….
+
+Checks:
+
+- dhcp networks are IPv4 and do not overlap; ranges lie within their
+  network, start before they end and do not overlap; routers lie within
+  the network; `lease` is not longer than `max-lease`.
+- `dhcp` on a host needs a `mac`. A host with `dhcp` on and a `mac` needs
+  an IPv4 address in the network of a `dhcp` block, and its fixed address
+  must not lie in a dynamic range. A MAC address may be used only once,
+  with or without `dhcp`.
 
 ## Validation
 
@@ -384,16 +456,16 @@ dot if you mean mail.home.arpa.
 Modelled on OpenBSD daemons:
 
 ```
-zonefile-go [-nV] [-f file] [-o path] [-s serialfile] [-t unbound|nsd]
+zonefile-go [-nV] [-f file] [-o path] [-s serialfile] [-t unbound|nsd|dhcpd]
 ```
 
 | Flag | Meaning                                                       |
 |------|---------------------------------------------------------------|
-| `-f` | configuration file (default `/etc/zonefile.conf`, `-` = stdin) |
+| `-f` | configuration file (default `/etc/zonefile.conf`, on FreeBSD `/usr/local/etc/zonefile.conf`; `-` = stdin) |
 | `-n` | check the configuration only, write nothing (like `pfctl -n`)  |
-| `-o` | output file for unbound (default stdout), directory for nsd (default `nsd`) |
-| `-s` | serial file (default `.serial`)                                |
-| `-t` | output format, `unbound` (default) or `nsd`                    |
+| `-o` | output file for unbound and dhcpd (default stdout), directory for nsd (default `nsd`) |
+| `-s` | serial file (default `/var/db/zonefile-go.serial`)             |
+| `-t` | output format, `unbound` (default), `nsd` or `dhcpd`           |
 | `-V` | print the version                                              |
 
 ## Mapping from zonefile-rs

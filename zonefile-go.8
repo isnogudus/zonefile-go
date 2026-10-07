@@ -10,7 +10,7 @@
 .Op Fl f Ar file
 .Op Fl o Ar path
 .Op Fl s Ar serialfile
-.Op Fl t Cm unbound | nsd
+.Op Fl t Cm unbound | nsd | dhcpd
 .Nm
 .Fl V
 .Sh DESCRIPTION
@@ -21,7 +21,9 @@ in the format described in
 and writes the zone data for
 .Xr unbound 8
 or
-.Xr nsd 8 .
+.Xr nsd 8 ,
+or the configuration of
+.Xr dhcpd 8 .
 PTR records are generated from the addresses of the hosts, for the
 networks declared as reverse zones.
 .Pp
@@ -54,7 +56,9 @@ Nothing is written and the serial is not changed.
 .It Fl o Ar path
 Where to write the output.
 For
-.Cm unbound ,
+.Cm unbound
+and
+.Cm dhcpd ,
 .Ar path
 is a file, written atomically; without
 .Fl o
@@ -71,7 +75,7 @@ see
 .Sx Serial numbers .
 The default is
 .Pa /var/db/zonefile-go.serial .
-.It Fl t Cm unbound | nsd
+.It Fl t Cm unbound | nsd | dhcpd
 The output format.
 The default is
 .Cm unbound .
@@ -88,6 +92,17 @@ with its
 and
 .Ic local-data-ptr
 statements per zone.
+.It Cm dhcpd
+A complete
+.Xr dhcpd.conf 5
+with one
+.Ic subnet
+declaration per
+.Ic dhcp
+block and a
+.Ic host
+declaration with a fixed address for every MAC address of a host.
+The serial file is neither read nor written.
 .It Cm nsd
 The file
 .Pa zones.conf ,
@@ -202,10 +217,20 @@ in
 has to be the output directory,
 .Pa /var/nsd/zones
 here.
+.Pp
+Write the configuration of
+.Xr dhcpd 8 ,
+check it and restart the daemon:
+.Bd -literal -offset indent
+# zonefile-go -t dhcpd -o /etc/dhcpd.conf
+# dhcpd -n -c /etc/dhcpd.conf && rcctl restart dhcpd
+.Ed
 .Sh SEE ALSO
+.Xr dhcpd.conf 5 ,
 .Xr nsd.conf 5 ,
 .Xr unbound.conf 5 ,
 .Xr zonefile.conf 5 ,
+.Xr dhcpd 8 ,
 .Xr nsd 8 ,
 .Xr unbound 8
 .Sh HISTORY

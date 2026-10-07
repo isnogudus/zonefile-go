@@ -2,6 +2,7 @@ package zone
 
 import (
 	"errors"
+	"fmt"
 	"net/netip"
 	"reflect"
 	"strings"
@@ -16,8 +17,8 @@ func resolve(t *testing.T, src string) ([]*Zone, error) {
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	zones, _, err := Resolve(cfg)
-	return zones, err
+	res, err := Resolve(cfg)
+	return res.Zones, err
 }
 
 func mustResolve(t *testing.T, src string) []*Zone {
@@ -62,13 +63,14 @@ func TestResolveExample(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseFile: %v", err)
 	}
-	zones, warnings, err := Resolve(cfg)
+	res, err := Resolve(cfg)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if len(warnings) != 0 {
-		t.Errorf("example has warnings:\n%v", warnings)
+	if len(res.Warnings) != 0 {
+		t.Errorf("example has warnings:\n%v", res.Warnings)
 	}
+	zones := res.Zones
 
 	var names []string
 	for _, z := range zones {
@@ -420,12 +422,13 @@ zone h.example.net {
 	if err != nil {
 		t.Fatal(err)
 	}
-	zones, warnings, err := Resolve(cfg)
+	res, err := Resolve(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
+	zones := res.Zones
 	var got []string
-	for _, w := range warnings {
+	for _, w := range res.Warnings {
 		got = append(got, w.Error())
 	}
 	want := []string{
@@ -438,5 +441,136 @@ zone h.example.net {
 	// Warnings do not change the result.
 	if c := zones[0].CNAMEs[0]; c.Target != "mail.home.arpa.h.example.net." {
 		t.Errorf("cname target = %q", c.Target)
+	}
+}
+
+func resolveAll(t *testing.T, src string) (*Result, error) {
+	t.Helper()
+	cfg, err := config.Parse("test.conf", strings.NewReader(src))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	return Resolve(cfg)
+}
+
+const dhcpHead = "email admin@example.com\nnameserver ns1.example.com.\n"
+
+func TestResolveDHCP(t *testing.T) {
+	res, err := resolveAll(t, dhcpHead+`
+dhcp 192.168.21.0/24 {
+	range .100 .199
+	router .1
+	dns-server { .1 192.0.2.53 }
+	domain example.com.
+	lease 1h
+}
+zone example.com {
+	network { 192.168.21.0/24 fd00::/64 }
+	host laptop .40 mac { 00:00:5e:00:53:67 00:00:5e:00:53:66 } dhcp
+	host printer .12 no inet6 mac 00:00:5e:00:53:12 dhcp
+	host server .2
+	host away 203.0.113.9 no ptr
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := res.DHCP[0]
+	if s.Ranges[0] != (Range{netip.MustParseAddr("192.168.21.100"), netip.MustParseAddr("192.168.21.199")}) ||
+		s.Routers[0].String() != "192.168.21.1" || s.DNSServers[1].String() != "192.0.2.53" ||
+		s.Domain != "example.com" || s.Lease != 3600 || s.MaxLease != 0 {
+		t.Errorf("subnet = %+v", s)
+	}
+	var got []string
+	for _, h := range s.Hosts {
+		got = append(got, fmt.Sprintf("%s %s %s %v", h.Name, h.HostName, h.MAC, h.Addrs))
+	}
+	want := []string{
+		"printer.example.com printer 00:00:5e:00:53:12 [192.168.21.12]",
+		"laptop.example.com laptop 00:00:5e:00:53:67 [192.168.21.40]",
+		"laptop-2.example.com laptop 00:00:5e:00:53:66 [192.168.21.40]",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("hosts:\n  %s\nwant\n  %s", strings.Join(got, "\n  "), strings.Join(want, "\n  "))
+	}
+}
+
+func TestResolveDHCPErrors(t *testing.T) {
+	tests := []struct {
+		name, src string
+		want      []string
+	}{
+		{"fixed address in range", "dhcp 10.0.0.0/24 {\n\trange .100 .199\n}\nzone a.example {\n\thost x 10.0.0.150 mac 00:00:5e:00:53:01 dhcp\n}\n", []string{
+			`test.conf:7: host x.a.example.: fixed address 10.0.0.150 lies in the dynamic range 10.0.0.100-10.0.0.199`}},
+		{"dhcp outside dhcp network", "dhcp 10.0.0.0/24 {\n}\nzone a.example {\n\thost x 10.1.0.1 mac 00:00:5e:00:53:01 dhcp\n}\n", []string{
+			`test.conf:6: host x.a.example.: dhcp needs an IPv4 address in the network of a dhcp block`}},
+		{"dhcp without ipv4", "zone a.example {\n\thost x fd00::1 mac 00:00:5e:00:53:01 dhcp\n}\n", []string{
+			`test.conf:4: host x.a.example.: dhcp needs an IPv4 address`}},
+		{"duplicate mac", "dhcp 10.0.0.0/24 {\n}\nzone a.example {\n\thost x 10.0.0.1 mac 00:00:5e:00:53:01 dhcp\n\thost y 10.0.0.2 mac 00:00:5E:00:53:01 dhcp\n}\n", []string{
+			`test.conf:7: host y.a.example.: MAC address 00:00:5e:00:53:01 already used at test.conf:6`}},
+		{"wildcard", "zone a.example {\n\thost * 10.0.0.1 mac 00:00:5e:00:53:01 dhcp\n}\n", []string{
+			`test.conf:4: host *.a.example.: a wildcard cannot have a mac`}},
+		{"dhcp without mac", "dhcp 10.0.0.0/24 {\n}\nzone a.example {\n\thost x 10.0.0.1 dhcp\n}\n", []string{
+			`test.conf:6: host x.a.example.: dhcp needs a mac`}},
+		{"duplicate mac without dhcp", "zone a.example {\n\thost x 10.0.0.1 mac 00:00:5e:00:53:01\n\thost y 10.0.0.2 mac 00:00:5e:00:53:01\n}\n", []string{
+			`test.conf:5: host y.a.example.: MAC address 00:00:5e:00:53:01 already used at test.conf:4`}},
+		{"zone dhcp, host outside network", "dhcp 10.0.0.0/24 {\n}\nzone a.example {\n\tdhcp\n\thost x 10.1.0.1 mac 00:00:5e:00:53:01\n}\n", []string{
+			`test.conf:7: host x.a.example.: dhcp needs an IPv4 address in the network of a dhcp block`}},
+		{"range outside", "dhcp 10.0.0.0/24 {\n\trange 10.0.1.1 10.0.1.9\n}\n", []string{
+			`test.conf:4: dhcp 10.0.0.0/24: range 10.0.1.1-10.0.1.9 is outside the network`}},
+		{"range reversed", "dhcp 10.0.0.0/24 {\n\trange .200 .100\n}\n", []string{
+			`test.conf:4: dhcp 10.0.0.0/24: range 10.0.0.200-10.0.0.100 ends before it starts`}},
+		{"ranges overlap", "dhcp 10.0.0.0/24 {\n\trange .10 .20\n\trange .20 .30\n}\n", []string{
+			`test.conf:5: dhcp 10.0.0.0/24: ranges 10.0.0.20-10.0.0.30 and 10.0.0.10-10.0.0.20 overlap`}},
+		{"router outside", "dhcp 10.0.0.0/24 {\n\trouter 10.1.0.1\n}\n", []string{
+			`test.conf:3: dhcp 10.0.0.0/24: router 10.1.0.1 is outside the network`}},
+		{"networks overlap", "dhcp 10.0.0.0/16 {\n}\ndhcp 10.0.1.0/24 {\n}\n", []string{
+			`test.conf:5: dhcp networks 10.0.1.0/24 and 10.0.0.0/16 overlap`}},
+		{"lease", "dhcp 10.0.0.0/24 {\n\tlease 2d\n\tmax-lease 1d\n}\n", []string{
+			`test.conf:3: dhcp 10.0.0.0/24: lease (172800) must not be longer than max-lease (86400)`}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := resolveAll(t, dhcpHead+tt.src)
+			var list config.ErrorList
+			if !errors.As(err, &list) {
+				t.Fatalf("err = %v, want ErrorList", err)
+			}
+			var got []string
+			for _, e := range list {
+				got = append(got, e.Error())
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("got\n  %s\nwant\n  %s", strings.Join(got, "\n  "), strings.Join(tt.want, "\n  "))
+			}
+		})
+	}
+}
+
+func TestResolveDHCPSwitch(t *testing.T) {
+	res, err := resolveAll(t, dhcpHead+`
+dhcp 10.0.0.0/24 {
+}
+zone a.example {
+	host on       10.0.0.1 mac 00:00:5e:00:53:01 dhcp
+	host noted    10.0.0.2 mac 00:00:5e:00:53:02
+	host plain    10.0.0.3
+}
+zone b.example {
+	dhcp
+	host inherits 10.0.0.4 mac 00:00:5e:00:53:04
+	host off      10.0.0.5 mac 00:00:5e:00:53:05 no dhcp
+	host nomac    10.0.0.6
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, h := range res.DHCP[0].Hosts {
+		got = append(got, h.Name)
+	}
+	if want := []string{"on.a.example", "inherits.b.example"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("hosts = %v, want %v", got, want)
 	}
 }

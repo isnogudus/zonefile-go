@@ -243,7 +243,7 @@ func TestParseErrors(t *testing.T) {
 		{"no mx at top level", "no mx\n", []string{
 			`test.conf:1: "no mx" is only allowed in a zone`}},
 		{"no what", "zone a {\n\tno cname\n}\n", []string{
-			`test.conf:2: expected "ptr" or "mx" after "no", got "cname"`}},
+			`test.conf:2: expected "ptr", "mx" or "dhcp" after "no", got "cname"`}},
 		{"zone ptr after record", "zone a {\n\thost x 10.0.0.1\n\tptr\n}\n", []string{
 			`test.conf:3: "ptr" must come before the first record`}},
 		{"no mx after mx", "zone a {\n\tmx m\n\tno mx\n}\n", []string{
@@ -305,5 +305,76 @@ zone b.example {
 	}
 	if h := a.Hosts[0]; h.PTR == nil || *h.PTR {
 		t.Errorf("host x PTR = %v, want false", h.PTR)
+	}
+}
+
+func TestParseDHCP(t *testing.T) {
+	cfg := mustParse(t, `
+dhcp 192.168.21.0/24 {
+	range .100 .199
+	range 192.168.21.220 .230
+	router .1
+	dns-server { .1 192.0.2.53 }
+	domain example.com
+	search { example.com, apps.example.com }
+	ntp-server .1
+	lease 1d
+	max-lease 7d
+}
+zone example.com {
+	host printer .12 mac 00:00:5E:00:53:12 dhcp
+	host laptop .40 mac { 00:00:5e:00:53:66 00:00:5e:00:53:67 } dhcp
+}
+`)
+	d := cfg.DHCP[0]
+	if d.Network.String() != "192.168.21.0/24" || len(d.Ranges) != 2 || len(d.DNSServers) != 2 ||
+		*d.Domain != "example.com" || len(d.Search) != 2 || *d.Lease != 86400 || *d.MaxLease != 604800 {
+		t.Errorf("dhcp = %+v", d)
+	}
+	if r := d.Ranges[1]; r.Low.Addr.String() != "192.168.21.220" || r.High.Suffix[0] != 230 {
+		t.Errorf("second range = %+v", r)
+	}
+	hosts := cfg.Zones[0].Hosts
+	if !reflect.DeepEqual(hosts[0].MACs, []string{"00:00:5e:00:53:12"}) || len(hosts[1].MACs) != 2 {
+		t.Errorf("macs = %v, %v", hosts[0].MACs, hosts[1].MACs)
+	}
+	if hosts[0].DHCP == nil || !*hosts[0].DHCP {
+		t.Errorf("printer dhcp = %v", hosts[0].DHCP)
+	}
+
+	cfg = mustParse(t, "zone a {\n\tdhcp\n\thost x 10.0.0.1 mac 00:00:5e:00:53:01 no dhcp\n}\nzone b {\n\tno dhcp\n}\n")
+	if d := cfg.Zones[0].Options.DHCP; d == nil || !*d {
+		t.Errorf("zone a dhcp = %v", d)
+	}
+	if d := cfg.Zones[0].Hosts[0].DHCP; d == nil || *d {
+		t.Errorf("host x dhcp = %v", d)
+	}
+	if d := cfg.Zones[1].Options.DHCP; d == nil || *d {
+		t.Errorf("zone b dhcp = %v", d)
+	}
+}
+
+func TestParseDHCPErrors(t *testing.T) {
+	tests := []struct {
+		name, src, want string
+	}{
+		{"ipv6", "dhcp fd00::/64 {\n}\n", `test.conf:1: dhcp fd00::/64: dhcpd serves IPv4 networks only`},
+		{"no block", "dhcp 10.0.0.0/8\n", `test.conf:1: expected "{", got end of line`},
+		{"unknown", "dhcp 10.0.0.0/8 {\n\tgateway .1\n}\n", `test.conf:2: unknown statement "gateway" in dhcp block`},
+		{"twice", "dhcp 10.0.0.0/8 {\n\trouter .1\n\trouter .2\n}\n", `test.conf:3: "router" given twice`},
+		{"dhcp twice", "zone a {\n\thost x 10.0.0.1 dhcp no dhcp\n}\n", `test.conf:2: "dhcp" given twice`},
+		{"zone dhcp after record", "zone a {\n\thost x 10.0.0.1\n\tdhcp\n}\n", `test.conf:3: "dhcp" must come before the first record`},
+		{"no dhcp at top level", "no dhcp\n", `test.conf:1: "no dhcp" is only allowed in a zone or on a host`},
+		{"no dhcp in reverse", "reverse 10.0.0.0/8 {\n\tno dhcp\n}\n", `test.conf:2: "no dhcp" is not allowed in a reverse block`},
+		{"bad mac", "zone a {\n\thost x 10.0.0.1 mac 00:11:22:33:44 dhcp\n}\n", `test.conf:2: invalid MAC address "00:11:22:33:44", expected six octets such as 00:00:5e:00:53:01`},
+		{"bad mac digit", "zone a {\n\thost x 10.0.0.1 mac 00:11:22:33:44:gg dhcp\n}\n", `test.conf:2: invalid MAC address "00:11:22:33:44:gg", expected six octets such as 00:00:5e:00:53:01`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Parse("test.conf", strings.NewReader(tt.src))
+			if err == nil || err.Error() != tt.want {
+				t.Errorf("err = %v\nwant  %s", err, tt.want)
+			}
+		})
 	}
 }
