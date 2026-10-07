@@ -36,7 +36,7 @@ func main() {
 		file       = flag.String("f", "/etc/zonefile.conf", "configuration file, - for stdin")
 		checkOnly  = flag.Bool("n", false, "check the configuration only")
 		outPath    = flag.String("o", "", "output file (unbound, default stdout) or directory (nsd, default nsd)")
-		serialFile = flag.String("s", ".serial", "serial number file")
+		serialFile = flag.String("s", "/var/db/zonefile-go.serial", "file with the serial and hash of each zone")
 		format     = flag.String("t", "unbound", "output format: unbound or nsd")
 		showVer    = flag.Bool("V", false, "print version and exit")
 	)
@@ -74,15 +74,15 @@ func main() {
 		return
 	}
 
-	old, err := serial.Load(*serialFile)
+	prev, err := serial.Load(*serialFile)
 	if err != nil {
 		fatal(err)
 	}
-	next := serial.Next(old, time.Now())
+	state := serial.Assign(zones, prev, output.ZoneHash, time.Now())
 
 	switch *format {
 	case "unbound":
-		data := output.Unbound(zones, next)
+		data := output.Unbound(zones)
 		if *outPath == "" {
 			_, err = os.Stdout.Write(data)
 		} else {
@@ -94,7 +94,7 @@ func main() {
 			dir = "nsd"
 		}
 		var removed []string
-		removed, err = output.WriteNSD(dir, zones, next)
+		removed, err = output.WriteNSD(dir, zones)
 		for _, file := range removed {
 			fmt.Fprintf(os.Stderr, "removed %s\n", filepath.Join(dir, file))
 		}
@@ -103,8 +103,8 @@ func main() {
 		fatal(err)
 	}
 
-	// Only store the serial once the zones have been written.
-	if err := serial.Save(*serialFile, next); err != nil {
+	// Only store the serials once the zones have been written.
+	if err := serial.Save(*serialFile, state); err != nil {
 		fatal(err)
 	}
 }

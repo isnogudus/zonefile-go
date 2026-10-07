@@ -5,6 +5,8 @@ package output
 
 import (
 	"cmp"
+	"crypto/sha256"
+	"encoding/hex"
 	"slices"
 	"strconv"
 	"strings"
@@ -12,13 +14,25 @@ import (
 	"github.com/isnogudus/zonefile-go/internal/zone"
 )
 
-// serialOf returns the serial of z: the one fixed in the configuration,
-// or else the computed one.
-func serialOf(z *zone.Zone, serial uint32) uint32 {
+// serialOf returns the serial of z. Serials are assigned before the output
+// is written, see serial.Assign; a zone without one is written with 0.
+func serialOf(z *zone.Zone) uint32 {
 	if z.SOA.Serial != nil {
 		return *z.SOA.Serial
 	}
-	return serial
+	return 0
+}
+
+// ZoneHash returns a hash of the NSD zone file of z with the serial set to
+// 0. It changes whenever anything but the serial changes, and is the same
+// whichever output format is written, so it tells whether a zone needs a
+// new serial.
+func ZoneHash(z *zone.Zone) string {
+	c := *z
+	var zero uint32
+	c.SOA.Serial = &zero
+	sum := sha256.Sum256(nsdZone(&c))
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 // ttlField returns the TTL to write for a record: empty if it is the

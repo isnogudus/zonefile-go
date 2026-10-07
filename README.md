@@ -56,9 +56,12 @@ are deleted from `master/`. Only files named in the previous `zones.conf`
 are considered, so zone files maintained by hand in the same directory are
 left alone.
 
-The SOA serial is `YYYYMMDDnn` (UTC date, counting up within a day) unless
-a zone sets `serial`. The last serial is kept in the serial file, which
-is only updated after the output has been written.
+A zone gets a new SOA serial only when its content changes: the serial
+file (default `/var/db/zonefile-go.serial`) keeps the serial of each zone
+together with a hash of its NSD zone file without the serial. A new serial
+is `YYYYMMDDnn` (UTC date, counting up within a day) unless the zone sets
+`serial`. The serial file is updated only after the output has been
+written; keep it, since it is the only record of the serials.
 
 ## Building
 

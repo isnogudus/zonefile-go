@@ -1,4 +1,4 @@
-.Dd October 6, 2026
+.Dd October 7, 2026
 .Dt ZONEFILE-GO 8
 .Os
 .Sh NAME
@@ -65,11 +65,12 @@ For
 is a directory, by default
 .Pa nsd .
 .It Fl s Ar serialfile
-Keep the last serial in
-.Ar serialfile .
+Keep the serial and content hash of each zone in
+.Ar serialfile ,
+see
+.Sx Serial numbers .
 The default is
-.Pa .serial
-in the current directory.
+.Pa /var/db/zonefile-go.serial .
 .It Fl t Cm unbound | nsd
 The output format.
 The default is
@@ -110,22 +111,43 @@ are left alone.
 Print the version and exit.
 .El
 .Ss Serial numbers
-Unless a zone sets a fixed serial with
-.Ic serial ,
-all zones get the same serial in the format
+A zone gets a new serial only when its content changes.
+The serial file holds one line per zone with its name, the serial it was
+last written with, and a SHA-256 hash of its NSD zone file with the serial
+set to 0.
+The hash is taken from the NSD form whichever format is written, so
+.Cm unbound
+and
+.Cm nsd
+output share the serial file and give a zone the same serial.
+.Pp
+If the hash of a zone is unchanged, the zone keeps its serial.
+If it changed, or the zone is new, the zone gets a serial in the format
 .Ar YYYYMMDDnn :
 the current date in UTC with
 .Ar nn
-set to 00, or the previous serial plus one if that is larger.
-Several runs on one day therefore count up, and the serial never goes
+set to 00, or its previous serial plus one if that is larger.
+Several changes on one day therefore count up, and a serial never goes
 back.
-The new serial is stored in the serial file only after the output has been
-written.
+A zone with a fixed
+.Ic serial
+keeps it.
+Zones that are no longer configured drop out of the serial file.
+.Pp
+The output is always written in full, also when no serial changed.
+The serial file is updated only after the output has been written.
+It is the only record of the serials: if it is lost, the serials start
+again from the current date, which may be lower than the serials already
+served.
+.Pp
+A serial file of an earlier version, which holds a single number, is
+taken over: that number is the previous serial of every zone, so each
+zone gets one new serial on the first run.
 .Sh FILES
-.Bl -tag -width "/etc/zonefile.conf" -compact
+.Bl -tag -width "/var/db/zonefile-go.serial" -compact
 .It Pa /etc/zonefile.conf
 Default configuration file.
-.It Pa .serial
+.It Pa /var/db/zonefile-go.serial
 Default serial file.
 .El
 .Sh EXIT STATUS
@@ -140,8 +162,7 @@ Generate local data for
 .Xr unbound 8
 and reload it:
 .Bd -literal -offset indent
-# zonefile-go -s /var/unbound/etc/zonefile.serial \e
-	-o /var/unbound/etc/zones.conf
+# zonefile-go -o /var/unbound/etc/zones.conf
 # unbound-control reload
 .Ed
 .Pp
@@ -157,7 +178,7 @@ Generate zones for
 .Xr nsd 8
 and reload them:
 .Bd -literal -offset indent
-# zonefile-go -t nsd -o /var/nsd/zones -s /var/nsd/zonefile.serial
+# zonefile-go -t nsd -o /var/nsd/zones
 # nsd-control reconfig && nsd-control reload
 .Ed
 .Pp

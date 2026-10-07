@@ -11,16 +11,15 @@ import (
 const unboundWidth = 46
 
 // Unbound returns all zones as an unbound.conf(5) fragment with
-// local-zone and local-data statements. Zones without a serial of their
-// own get serial.
-func Unbound(zones []*zone.Zone, serial uint32) []byte {
+// local-zone and local-data statements.
+func Unbound(zones []*zone.Zone) []byte {
 	var b bytes.Buffer
 	b.WriteString("server:\n")
 	for _, z := range zones {
 		if z.Reverse {
-			unboundReverse(&b, z, serial)
+			unboundReverse(&b, z)
 		} else {
-			unboundForward(&b, z, serial)
+			unboundForward(&b, z)
 		}
 		b.WriteByte('\n')
 	}
@@ -31,19 +30,19 @@ func unboundData(b *bytes.Buffer, prefix, name, ttl, data string) {
 	fmt.Fprintf(b, "%s\"%-*s %s %s\"\n", prefix, unboundWidth-len(ttl), name, ttl, data)
 }
 
-func unboundSOA(b *bytes.Buffer, prefix string, z *zone.Zone, serial uint32) {
+func unboundSOA(b *bytes.Buffer, prefix string, z *zone.Zone) {
 	soa := z.SOA
 	unboundData(b, prefix, z.Name, u(z.TTL), fmt.Sprintf("IN SOA  %s %s %d %d %d %d %d",
-		z.NS[0].Name, soa.Email, serialOf(z, serial), soa.Refresh, soa.Retry, soa.Expire, soa.Minimum))
+		z.NS[0].Name, soa.Email, serialOf(z), soa.Refresh, soa.Retry, soa.Expire, soa.Minimum))
 	for _, ns := range z.NS {
 		unboundData(b, prefix, z.Name, ttlField(ns.TTL, z.TTL), "IN NS   "+ns.Name)
 	}
 }
 
-func unboundForward(b *bytes.Buffer, z *zone.Zone, serial uint32) {
+func unboundForward(b *bytes.Buffer, z *zone.Zone) {
 	const prefix = "local-data: "
 	fmt.Fprintf(b, "local-zone:  %s static\n", z.Name)
-	unboundSOA(b, prefix, z, serial)
+	unboundSOA(b, prefix, z)
 	for _, mx := range z.MX {
 		unboundData(b, prefix, z.Name, ttlField(mx.TTL, z.TTL), fmt.Sprintf("IN MX   %d %s", mx.Priority, mx.Name))
 	}
@@ -63,10 +62,10 @@ func unboundForward(b *bytes.Buffer, z *zone.Zone, serial uint32) {
 	}
 }
 
-func unboundReverse(b *bytes.Buffer, z *zone.Zone, serial uint32) {
+func unboundReverse(b *bytes.Buffer, z *zone.Zone) {
 	const prefix = "local-data:     "
 	fmt.Fprintf(b, "local-zone:      %s static\n", z.Name)
-	unboundSOA(b, prefix, z, serial)
+	unboundSOA(b, prefix, z)
 	for _, p := range z.PTRs {
 		ttl := ttlField(p.TTL, z.TTL)
 		fmt.Fprintf(b, "local-data-ptr: \"%-*s %s %s\"\n", unboundWidth-len(ttl), p.Addr, ttl, p.Target)

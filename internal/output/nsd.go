@@ -19,14 +19,14 @@ const nsdWidth = 32
 
 // NSDFiles returns the files for NSD: zones.conf with one zone: entry per
 // zone and master/<zone>zone with the zone data, keyed by path relative to
-// the output directory. Zones without a serial of their own get serial.
-func NSDFiles(zones []*zone.Zone, serial uint32) map[string][]byte {
+// the output directory.
+func NSDFiles(zones []*zone.Zone) map[string][]byte {
 	files := map[string][]byte{}
 	var conf bytes.Buffer
 	for _, z := range zones {
 		file := "master/" + z.Name + "zone"
 		fmt.Fprintf(&conf, "zone:\n    name: %s\n    zonefile: %s\n\n", z.Name, file)
-		files[file] = nsdZone(z, serial)
+		files[file] = nsdZone(z)
 	}
 	files["zones.conf"] = conf.Bytes()
 	return files
@@ -64,8 +64,8 @@ func generatedZoneFiles(dir string) ([]string, error) {
 // Zone files that the previous zones.conf named but that are no longer
 // generated are removed afterwards; other files in master are left alone.
 // It returns the removed files, relative to dir.
-func WriteNSD(dir string, zones []*zone.Zone, serial uint32) ([]string, error) {
-	files := NSDFiles(zones, serial)
+func WriteNSD(dir string, zones []*zone.Zone) ([]string, error) {
+	files := NSDFiles(zones)
 	if err := os.MkdirAll(filepath.Join(dir, "master"), 0o755); err != nil {
 		return nil, err
 	}
@@ -127,7 +127,7 @@ func nsdLine(b *bytes.Buffer, name string, ttl, zoneTTL uint32, typ, data string
 	fmt.Fprintf(b, "%s %-*s %s\n", nameTTL, typeWidth, typ, data)
 }
 
-func nsdZone(z *zone.Zone, serial uint32) []byte {
+func nsdZone(z *zone.Zone) []byte {
 	var b bytes.Buffer
 	indent := strings.Repeat(" ", nsdWidth)
 	soa := z.SOA
@@ -137,7 +137,7 @@ func nsdZone(z *zone.Zone, serial uint32) []byte {
 		value   uint32
 		comment string
 	}{
-		{serialOf(z, serial), "serial number"},
+		{serialOf(z), "serial number"},
 		{soa.Refresh, "refresh"},
 		{soa.Retry, "retry"},
 		{soa.Expire, "expire"},

@@ -46,11 +46,11 @@ func golden(t *testing.T, name string, got []byte) {
 }
 
 func TestUnbound(t *testing.T) {
-	golden(t, "unbound", Unbound(loadZones(t), 1))
+	golden(t, "unbound", Unbound(loadZones(t)))
 }
 
 func TestNSD(t *testing.T) {
-	files := NSDFiles(loadZones(t), 1)
+	files := NSDFiles(loadZones(t))
 	if len(files) != 4 {
 		t.Errorf("got %d files, want 4", len(files))
 	}
@@ -61,7 +61,7 @@ func TestNSD(t *testing.T) {
 
 func TestWriteNSD(t *testing.T) {
 	dir := t.TempDir()
-	if _, err := WriteNSD(dir, loadZones(t), 1); err != nil {
+	if _, err := WriteNSD(dir, loadZones(t)); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"zones.conf", "master/example.com.zone", "master/2.0.192.in-addr.arpa.zone"} {
@@ -75,18 +75,51 @@ func TestWriteNSD(t *testing.T) {
 	}
 }
 
-func TestComputedSerial(t *testing.T) {
+func TestZoneHash(t *testing.T) {
 	zones := loadZones(t)
-	zones[0].SOA.Serial = nil
-	if !bytes.Contains(Unbound(zones, 2026100499), []byte(" 2026100499 ")) {
-		t.Error("computed serial not used for a zone without a fixed serial")
+	z := zones[0]
+	h := ZoneHash(z)
+	if !strings.HasPrefix(h, "sha256:") || len(h) != len("sha256:")+64 {
+		t.Fatalf("hash = %q", h)
+	}
+
+	// The serial does not count, and the zone itself is not changed.
+	other := uint32(2030010100)
+	before := z.SOA.Serial
+	c := *z
+	c.SOA.Serial = &other
+	if ZoneHash(&c) != h {
+		t.Error("hash depends on the serial")
+	}
+	if z.SOA.Serial != before {
+		t.Error("ZoneHash changed the zone")
+	}
+
+	// Any other change does.
+	c.TTL++
+	if ZoneHash(&c) == h {
+		t.Error("hash ignores the TTL")
+	}
+	if ZoneHash(zones[1]) == h {
+		t.Error("two zones have the same hash")
+	}
+}
+
+func TestSerialPerZone(t *testing.T) {
+	zones := loadZones(t)
+	a, b := uint32(2026100701), uint32(2026100502)
+	zones[0].SOA.Serial = &a
+	zones[1].SOA.Serial = &b
+	out := Unbound(zones)
+	if !bytes.Contains(out, []byte(" 2026100701 ")) || !bytes.Contains(out, []byte(" 2026100502 ")) {
+		t.Errorf("serials of the zones not in the output:\n%s", out)
 	}
 }
 
 func TestWriteNSDRemovesStaleZones(t *testing.T) {
 	dir := t.TempDir()
 	zones := loadZones(t)
-	if _, err := WriteNSD(dir, zones, 1); err != nil {
+	if _, err := WriteNSD(dir, zones); err != nil {
 		t.Fatal(err)
 	}
 	// A zone file that zonefile-go did not write must survive.
@@ -96,7 +129,7 @@ func TestWriteNSDRemovesStaleZones(t *testing.T) {
 	}
 
 	// Drop the IPv6 reverse zone.
-	removed, err := WriteNSD(dir, zones[:2], 1)
+	removed, err := WriteNSD(dir, zones[:2])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +147,7 @@ func TestWriteNSDRemovesStaleZones(t *testing.T) {
 	}
 
 	// A second run has nothing left to remove.
-	if removed, err := WriteNSD(dir, zones[:2], 1); err != nil || len(removed) != 0 {
+	if removed, err := WriteNSD(dir, zones[:2]); err != nil || len(removed) != 0 {
 		t.Errorf("second run: removed = %v, err = %v", removed, err)
 	}
 }

@@ -3,8 +3,12 @@ package serial
 import (
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/isnogudus/zonefile-go/internal/zone"
 )
 
 func TestNext(t *testing.T) {
@@ -31,26 +35,97 @@ func TestNext(t *testing.T) {
 }
 
 func TestLoadSave(t *testing.T) {
-	path := filepath.Join(t.TempDir(), ".serial")
-	if n, err := Load(path); n != 0 || err != nil {
-		t.Fatalf("Load(missing) = %d, %v", n, err)
+	path := filepath.Join(t.TempDir(), "serial")
+	st, err := Load(path)
+	if err != nil || len(st.Zones) != 0 || st.Legacy != 0 {
+		t.Fatalf("Load(missing) = %+v, %v", st, err)
 	}
-	if err := Save(path, 2026100401); err != nil {
+
+	want := State{Zones: map[string]Entry{
+		"example.com.":          {2026100701, "sha256:aa"},
+		"168.192.in-addr.arpa.": {2026100600, "sha256:bb"},
+	}}
+	if err := Save(path, want); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := Load(path); n != 2026100401 || err != nil {
-		t.Fatalf("Load = %d, %v", n, err)
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
 	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("round trip:\ngot  %+v\nwant %+v", got, want)
+	}
+	b, _ := os.ReadFile(path)
+	if lines := strings.Split(strings.TrimSpace(string(b)), "\n"); len(lines) != 3 ||
+		!strings.HasPrefix(lines[0], "#") || !strings.HasPrefix(lines[1], "168.192.in-addr.arpa.") {
+		t.Errorf("file:\n%s", b)
+	}
+}
+
+func TestLoadLegacy(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".serial")
 	if err := os.WriteFile(path, []byte("  2025012301 \n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := Load(path); n != 2025012301 || err != nil {
-		t.Fatalf("Load(whitespace) = %d, %v", n, err)
+	st, err := Load(path)
+	if err != nil || st.Legacy != 2025012301 || len(st.Zones) != 0 {
+		t.Fatalf("Load(legacy) = %+v, %v", st, err)
 	}
-	if err := os.WriteFile(path, []byte("garbage"), 0o644); err != nil {
-		t.Fatal(err)
+}
+
+func TestLoadInvalid(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "serial")
+	for _, content := range []string{"garbage\n", "example.com. 12 sha256:aa extra\n", "example.com. x sha256:aa\n"} {
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Load(path); err == nil {
+			t.Errorf("Load(%q) succeeded", content)
+		}
 	}
-	if _, err := Load(path); err == nil {
-		t.Fatal("Load(garbage) succeeded")
+}
+
+func TestAssign(t *testing.T) {
+	now := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	fixed := uint32(42)
+	zones := []*zone.Zone{
+		{Name: "same.example."},
+		{Name: "Changed.Example."},
+		{Name: "new.example."},
+		{Name: "fixed.example.", SOA: zone.SOA{Serial: &fixed}},
+	}
+	hashes := map[string]string{
+		"same.example.":    "h1",
+		"Changed.Example.": "h2-new",
+		"new.example.":     "h3",
+		"fixed.example.":   "h4",
+	}
+	prev := State{Zones: map[string]Entry{
+		"same.example.":    {2026100500, "h1"},
+		"changed.example.": {2026100701, "h2-old"},
+		"gone.example.":    {2026010100, "h5"},
+	}, Legacy: 2026100799}
+
+	next := Assign(zones, prev, func(z *zone.Zone) string { return hashes[z.Name] }, now)
+
+	want := map[string]uint32{
+		"same.example.":    2026100500, // unchanged: keeps its serial
+		"Changed.Example.": 2026100702, // changed: counts up
+		"new.example.":     2026100800, // new: follows the legacy serial
+		"fixed.example.":   42,
+	}
+	for _, z := range zones {
+		if got := *z.SOA.Serial; got != want[z.Name] {
+			t.Errorf("%s: serial %d, want %d", z.Name, got, want[z.Name])
+		}
+	}
+	wantState := map[string]Entry{
+		"same.example.":    {2026100500, "h1"},
+		"changed.example.": {2026100702, "h2-new"},
+		"new.example.":     {2026100800, "h3"},
+		"fixed.example.":   {42, "h4"},
+	}
+	if !reflect.DeepEqual(next.Zones, wantState) || next.Legacy != 0 {
+		t.Errorf("state:\ngot  %+v\nwant %+v", next, wantState)
 	}
 }
