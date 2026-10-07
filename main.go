@@ -33,7 +33,7 @@ func fatal(err error) {
 
 func main() {
 	var (
-		file       = flag.String("f", "/etc/zonefile.conf", "configuration file, - for stdin")
+		file       = flag.String("f", defaultConfig, "configuration file, - for stdin")
 		checkOnly  = flag.Bool("n", false, "check the configuration only")
 		outPath    = flag.String("o", "", "output file (unbound, default stdout) or directory (nsd, default nsd)")
 		serialFile = flag.String("s", "/var/db/zonefile-go.serial", "file with the serial and hash of each zone")

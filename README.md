@@ -72,7 +72,23 @@ make build-all        # OpenBSD, FreeBSD and Linux binaries
 make test             # go vet and the tests with -race
 make install          # to /usr/local; PREFIX, DESTDIR and MANDIR are honoured
 make man              # check and show the manual pages
+make dist-openbsd     # dist/zonefile-go-VERSION-openbsd-amd64.tgz
+make dist-freebsd     # dist/zonefile-go-VERSION-freebsd-amd64.tgz
 ```
+
+The `dist` archives can be built on any system, e.g. a Mac, and hold the
+binary, both manual pages and the example configuration in the layout of
+`/usr/local`, owned by root. `DIST_ARCH=arm64` builds them for arm64.
+On the server:
+
+```
+# tar -xzf zonefile-go-VERSION-openbsd-amd64.tgz -C /usr/local
+# makewhatis /usr/local/man
+```
+
+On FreeBSD the manual pages go to `/usr/local/share/man`, and the default
+configuration file is `/usr/local/etc/zonefile.conf` instead of
+`/etc/zonefile.conf`, in the binary and in the manual pages.
 
 The manual pages are [zonefile-go(8)](zonefile-go.8) and
 [zonefile.conf(5)](zonefile.conf.5).
