@@ -197,17 +197,28 @@ func (p *parser) setting(o *Options, ptr bool, mx *bool) bool {
 		return true
 	case mx != nil && p.Accept("dhcp"):
 		return once(p, n, &o.DHCP, false)
+	case mx != nil && (p.Is("inet") || p.Is("inet6")):
+		p.Next()
+		dst, other := &o.Inet, o.Inet6
+		if n.Text == "inet6" {
+			dst, other = &o.Inet6, o.Inet
+		}
+		if other != nil && !*other {
+			p.Errorf(n.Pos, `"no inet" and "no inet6" together leave no addresses`)
+			return false
+		}
+		return once(p, n, dst, false)
 	case n.Kind == obsdconf.Word && n.Text == "mx" && ptr:
 		p.Errorf(n.Pos, `"no mx" is only allowed in a zone`)
 		return false
-	case n.Kind == obsdconf.Word && n.Text == "dhcp" && ptr:
-		p.Errorf(n.Pos, `"no dhcp" is only allowed in a zone or on a host`)
+	case n.Kind == obsdconf.Word && (n.Text == "dhcp" || n.Text == "inet" || n.Text == "inet6") && ptr:
+		p.Errorf(n.Pos, "%q is only allowed in a zone or on a host", "no "+n.Text)
 		return false
-	case n.Kind == obsdconf.Word && (n.Text == "ptr" || n.Text == "mx" || n.Text == "dhcp"):
+	case n.Kind == obsdconf.Word && (n.Text == "ptr" || n.Text == "mx" || n.Text == "dhcp" || n.Text == "inet" || n.Text == "inet6"):
 		p.Errorf(n.Pos, "%q is not allowed in a reverse block", "no "+n.Text)
 		return false
 	case mx != nil:
-		return p.Expected(`"ptr", "mx" or "dhcp" after "no"`)
+		return p.Expected(`"ptr", "mx", "dhcp", "inet" or "inet6" after "no"`)
 	}
 	return p.Expected(`"ptr" after "no"`)
 }
@@ -332,6 +343,12 @@ func (p *parser) hostAddr() (HostAddr, bool) {
 		}
 		return HostAddr{Suffix: s}, true
 	}
+	// An absolute name refers to the addresses of another host; no
+	// address ends in a dot.
+	if t.Kind == obsdconf.Word && strings.HasSuffix(t.Text, ".") {
+		p.Next()
+		return HostAddr{Ref: t.Text}, true
+	}
 	a, ok := p.Addr()
 	return HostAddr{Addr: a}, ok
 }
@@ -428,7 +445,10 @@ func (p *parser) zoneStmt(z *Zone, st *blockState) bool {
 	t := p.Tok()
 	switch t.Text {
 	case "dhcp":
-		// A switch like ptr; at top level dhcp opens a block instead.
+		if k := p.Peek(1).Kind; k == obsdconf.LBrace || k == obsdconf.Word {
+			return p.zoneDHCP(z)
+		}
+		// A switch like ptr; with a brace, a dhcp block for the zone.
 		if st.records {
 			p.Errorf(t.Pos, `"dhcp" must come before the first record`)
 			return false
@@ -548,7 +568,7 @@ func (p *parser) host() (Host, bool) {
 			return h, false
 		}
 	}
-	if h.NoInet && h.NoInet6 {
+	if h.Inet != nil && !*h.Inet && h.Inet6 != nil && !*h.Inet6 {
 		p.Errorf(h.Pos, "host %q: no inet and no inet6 leave no addresses", h.Name)
 		return h, false
 	}
@@ -594,6 +614,10 @@ func (p *parser) hostOptions(h *Host) bool {
 			ok = p.durationValue(kw, &h.TTL, 1)
 		case "ptr":
 			ok = once(p, kw, &h.PTR, true)
+		case "inet":
+			ok = once(p, kw, &h.Inet, true)
+		case "inet6":
+			ok = once(p, kw, &h.Inet6, true)
 		case "no":
 			ok = p.hostNo(h)
 		default:
@@ -612,23 +636,16 @@ func (p *parser) hostNo(h *Host) bool {
 	if _, ok := p.Enum(what, "ptr", "dhcp", "inet", "inet6"); !ok {
 		return false
 	}
-	var flag *bool
 	switch t.Text {
 	case "ptr":
 		return once(p, t, &h.PTR, false)
 	case "dhcp":
 		return once(p, t, &h.DHCP, false)
 	case "inet":
-		flag = &h.NoInet
-	case "inet6":
-		flag = &h.NoInet6
+		return once(p, t, &h.Inet, false)
+	default: // inet6
+		return once(p, t, &h.Inet6, false)
 	}
-	if *flag {
-		p.Errorf(t.Pos, "\"no %s\" given twice", t.Text)
-		return false
-	}
-	*flag = true
-	return true
 }
 
 func (p *parser) cname() (CNAME, bool) {
@@ -938,4 +955,52 @@ func (p *parser) dhcpOption(o *DHCPOptions, where string) bool {
 	}
 	p.Errorf(t.Pos, "unknown dhcp option %q, known are %s", name, strings.Join(dhcpOptionNames, ", "))
 	return false
+}
+
+// zoneDHCP parses a dhcp block in a zone. It serves the network it names,
+// or else the IPv4 network of the zone, which must be declared before; its
+// domain-name is the zone unless the block gives one.
+func (p *parser) zoneDHCP(z *Zone) bool {
+	kw := p.Tok()
+	p.Next()
+	var v4 netip.Prefix
+	named := p.Tok().Kind == obsdconf.Word
+	if named {
+		pfx, ok := p.Prefix()
+		if !ok {
+			return false
+		}
+		if !pfx.Addr().Is4() {
+			p.Errorf(kw.Pos, "dhcp %s: dhcpd serves IPv4 networks only", pfx)
+			return false
+		}
+		v4 = pfx
+	} else {
+		for _, d := range z.DHCPBlocks {
+			if d.implicit {
+				p.Errorf(kw.Pos, "zone %q already has a dhcp block for its network at %s; name the network of a further one", z.Name, d.Pos)
+				return false
+			}
+		}
+		for _, n := range z.Networks {
+			if n.Addr().Is4() {
+				v4 = n
+			}
+		}
+		if !v4.IsValid() {
+			p.Errorf(kw.Pos, "dhcp block in zone %q needs an IPv4 network statement before it, or a network of its own", z.Name)
+			return false
+		}
+	}
+	d := &DHCP{Pos: kw.Pos, Network: v4, implicit: !named}
+	z.DHCPBlocks = append(z.DHCPBlocks, d)
+	p.cfg.DHCP = append(p.cfg.DHCP, d)
+	ok := p.Block(fmt.Sprintf("dhcp in zone %q", z.Name), func() bool {
+		return p.dhcpStmt(d, "dhcp block")
+	})
+	if d.Domain == nil {
+		domain := strings.TrimSuffix(z.Name, ".")
+		d.Domain = &domain
+	}
+	return ok
 }

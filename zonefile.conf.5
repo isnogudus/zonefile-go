@@ -219,6 +219,33 @@ Like the settings, it must come before the first record.
 The default profile of the hosts of the zone, see
 .Sx DHCP ;
 it must come before the first record.
+.It Ic dhcp Oo Ar network Oc No { ... }
+A
+.Ic dhcp
+block, see
+.Sx DHCP ,
+for
+.Ar network ,
+or without it for the IPv4 network of the zone, which a
+.Ic network
+statement must declare before it.
+Its
+.Ic option domain-name
+is the zone unless the block gives one, and it turns
+.Ic dhcp
+on for the hosts of the zone;
+.Ic no dhcp
+in the zone or on a host wins.
+A zone may have one such block without a network, and any number with
+one.
+.It Ic no inet | no inet6
+Drop the IPv4 or IPv6 addresses of all hosts of the zone, whether
+suffixes, full addresses or taken from other hosts.
+A host turns the family on again with
+.Ic inet
+or
+.Ic inet6 .
+Not both in one zone; it must come before the first record.
 .It Ic no mx
 The zone has no MX records, not even the top-level ones.
 Not allowed together with
@@ -239,8 +266,8 @@ The default priority is 0, here and at top level.
 .Op Ic alias Ar name | { name ... }
 .Op Ic ttl Ar duration
 .Op Oo Ic no Oc Ic ptr
-.Op Ic no inet
-.Op Ic no inet6
+.Op Oo Ic no Oc Ic inet
+.Op Oo Ic no Oc Ic inet6
 .Op Ic mac Ar address | { address ... }
 .Op Oo Ic no Oc Ic dhcp
 .Op Ic dhcp-profile Ar name
@@ -249,6 +276,16 @@ The default priority is 0, here and at top level.
 Create one A or AAAA record per address.
 The options may also be given in a block after the addresses, one or more
 per line; each still only once.
+An address may also be the absolute name of a host or alias of the
+configuration, ending in a dot, such as
+.Sq unifi.home.arpa. ;
+the host then gets its A and AAAA records, without PTR records.
+.Ic no inet
+and
+.Ic no inet6
+apply to them as well.
+A name without addresses, or one that takes its own addresses from
+another host, is an error.
 An address is a full IPv4 or IPv6 address, or a suffix such as
 .Cm .37
 or
@@ -268,7 +305,15 @@ record.
 and
 .Ic no inet6
 drop the addresses of that family, for hosts without IPv6 in a zone with
-both networks.
+both networks;
+.Ic inet
+and
+.Ic inet6
+keep them against a
+.Ic no inet
+or
+.Ic no inet6
+of the zone.
 .Ic ptr
 and
 .Ic no ptr

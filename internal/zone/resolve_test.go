@@ -950,3 +950,199 @@ func TestResolveUnusedMacroNote(t *testing.T) {
 		t.Errorf("notes = %v", res.Notes)
 	}
 }
+
+func TestResolveHostRefs(t *testing.T) {
+	zones := mustResolve(t, `
+email admin@home.arpa
+nameserver ns1.home.arpa.
+reverse 192.168.0.0/16
+zone unifi {
+	host unifi unifi.home.arpa. alias @
+	host both { 192.0.2.9 unifi.home.arpa. } no inet6
+}
+zone home.arpa {
+	network { 192.168.21.0/24 fd00::/64 }
+	host wopr .1 alias ns1
+	host unifi .10
+}
+`)
+	u := find(zones, "unifi.")
+	if got := addrsOf(u, "unifi."); !reflect.DeepEqual(got, []string{"192.168.21.10", "fd00::a"}) {
+		t.Errorf("apex = %v", got)
+	}
+	if got := addrsOf(u, "unifi.unifi."); !reflect.DeepEqual(got, []string{"192.168.21.10", "fd00::a"}) {
+		t.Errorf("unifi.unifi = %v", got)
+	}
+	// Mixed with an address of its own, and no inet6 applies to both.
+	if got := addrsOf(u, "both.unifi."); !reflect.DeepEqual(got, []string{"192.0.2.9", "192.168.21.10"}) {
+		t.Errorf("both = %v", got)
+	}
+	// Only the host referred to gets a PTR record.
+	rev := find(zones, "168.192.in-addr.arpa.")
+	if got := ptrTarget(rev, "192.168.21.10"); got != "unifi.home.arpa." {
+		t.Errorf("PTR = %q", got)
+	}
+}
+
+func TestResolveHostRefErrors(t *testing.T) {
+	const head = "email a@example.com\nnameserver ns.example.net.\n"
+	tests := []struct {
+		name, src string
+		want      []string
+	}{
+		{"unknown", head + "zone a.example {\n\thost x missing.b.example.\n}\n", []string{
+			`test.conf:4: host x.a.example.: missing.b.example. has no address in the configured zones`}},
+		{"chain", head + "zone a.example {\n\thost x y.a.example.\n\thost y z.a.example.\n\thost z 10.0.0.1\n}\n", []string{
+			`test.conf:4: host x.a.example.: y.a.example. takes its addresses from another host itself`}},
+		{"cycle", head + "zone a.example {\n\thost x y.a.example.\n\thost y x.a.example.\n}\n", []string{
+			`test.conf:4: host x.a.example.: y.a.example. takes its addresses from another host itself`,
+			`test.conf:5: host y.a.example.: x.a.example. takes its addresses from another host itself`}},
+		{"nothing left", head + "zone a.example {\n\thost x y.a.example. no inet\n\thost y 10.0.0.1\n}\n", []string{
+			`test.conf:4: host x.a.example. has no addresses left`}},
+		{"cname conflict", head + "zone a.example {\n\thost x y.a.example.\n\thost y 10.0.0.1\n\tcname x y\n}\n", []string{
+			`test.conf:6: cname x.a.example. conflicts with other records for that name at test.conf:4`}},
+		{"in dhcp", head + "dhcp 10.0.0.0/24 {\n\toption routers gw.a.example.\n}\n", []string{
+			`test.conf:3: dhcp 10.0.0.0/24: option routers gw.a.example.: only hosts may refer to the addresses of other hosts`}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := resolve(t, tt.src)
+			var list config.ErrorList
+			if !errors.As(err, &list) {
+				t.Fatalf("err = %v, want ErrorList", err)
+			}
+			var got []string
+			for _, e := range list {
+				got = append(got, e.Error())
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("got\n  %s\nwant\n  %s", strings.Join(got, "\n  "), strings.Join(tt.want, "\n  "))
+			}
+		})
+	}
+}
+
+func TestResolveZoneFamilies(t *testing.T) {
+	zones := mustResolve(t, `
+email admin@home.arpa
+nameserver ns1.home.arpa.
+zone unifi {
+	no inet6
+	host unifi unifi.home.arpa. alias @
+	host dual  unifi.home.arpa. inet6
+}
+zone home.arpa {
+	network { 192.168.21.0/24 fd00::/64 }
+	host wopr  .1 alias ns1
+	host unifi .10
+}
+zone v6only.home.arpa {
+	no inet
+	network { 192.168.22.0/24 fd00:1::/64 }
+	host x .5
+}
+`)
+	u := find(zones, "unifi.")
+	if got := addrsOf(u, "unifi."); !reflect.DeepEqual(got, []string{"192.168.21.10"}) {
+		t.Errorf("unifi apex = %v", got)
+	}
+	// inet6 on the host overrides the zone.
+	if got := addrsOf(u, "dual.unifi."); !reflect.DeepEqual(got, []string{"192.168.21.10", "fd00::a"}) {
+		t.Errorf("dual = %v", got)
+	}
+	v6 := find(zones, "v6only.home.arpa.")
+	if got := addrsOf(v6, "x.v6only.home.arpa."); !reflect.DeepEqual(got, []string{"fd00:1::5"}) {
+		t.Errorf("x = %v", got)
+	}
+	_, err := resolve(t, `
+email admin@home.arpa
+nameserver ns.example.net.
+zone v6only.home.arpa {
+	no inet
+	host y 192.0.2.1
+}
+`)
+	if err == nil || !strings.Contains(err.Error(), "test.conf:6: host y has no addresses left") {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestResolveZoneDHCP(t *testing.T) {
+	res, err := resolveAll(t, dhcpHead+`
+dhcp {
+	option routers .1
+}
+zone haus.home.arpa {
+	network 192.168.200.0/24
+	dhcp {
+		range .200 .219
+	}
+	host e3dc    .13 mac 6c:c3:74:46:42:e3
+	host mygekko .14 mac ac:0d:fe:30:0a:89 no dhcp
+	host wopr    .1
+}
+zone quiet.home.arpa {
+	no dhcp
+	network 192.168.201.0/24
+	dhcp {
+		range .100 .150
+	}
+	host cam .20 mac 00:00:5e:00:53:20
+	host tv  .21 mac 00:00:5e:00:53:21 dhcp
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := func(s *Subnet) []string {
+		var out []string
+		for _, h := range s.Hosts {
+			out = append(out, h.Name)
+		}
+		return out
+	}
+	haus := res.DHCP[0]
+	if haus.Network.String() != "192.168.200.0/24" || haus.Domain != "haus.home.arpa" ||
+		haus.Routers[0].String() != "192.168.200.1" {
+		t.Errorf("haus = %+v", haus.DHCPOptions)
+	}
+	// The block turns dhcp on for the zone; no dhcp on a host wins.
+	if got := names(haus); !reflect.DeepEqual(got, []string{"e3dc.haus.home.arpa"}) {
+		t.Errorf("haus hosts = %v", got)
+	}
+	// no dhcp in the zone wins over the block.
+	if got := names(res.DHCP[1]); !reflect.DeepEqual(got, []string{"tv.quiet.home.arpa"}) {
+		t.Errorf("quiet hosts = %v", got)
+	}
+
+	_, err = resolveAll(t, dhcpHead+`
+dhcp 192.168.200.0/24 {
+}
+zone haus.home.arpa {
+	network 192.168.200.0/24
+	dhcp {
+	}
+}
+`)
+	if err == nil || !strings.Contains(err.Error(), "test.conf:8: dhcp networks 192.168.200.0/24 and 192.168.200.0/24 overlap") {
+		t.Errorf("overlap: err = %v", err)
+	}
+}
+
+func TestResolveZoneDHCPOverlap(t *testing.T) {
+	for _, tt := range []struct{ name, src, want string }{
+		{"same zone, same network", "zone a.example {\n\tnetwork 10.0.0.0/24\n\tdhcp {\n\t}\n\tdhcp 10.0.0.0/24 {\n\t}\n}\n",
+			"test.conf:7: dhcp networks 10.0.0.0/24 and 10.0.0.0/24 overlap"},
+		{"same zone, nested", "zone a.example {\n\tdhcp 10.0.0.0/16 {\n\t}\n\tdhcp 10.0.1.0/24 {\n\t}\n}\n",
+			"test.conf:6: dhcp networks 10.0.1.0/24 and 10.0.0.0/16 overlap"},
+		{"two zones", "zone a.example {\n\tdhcp 10.0.0.0/24 {\n\t}\n}\nzone b.example {\n\tdhcp 10.0.0.0/23 {\n\t}\n}\n",
+			"test.conf:8: dhcp networks 10.0.0.0/23 and 10.0.0.0/24 overlap"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := resolveAll(t, dhcpHead+tt.src)
+			if err == nil || err.Error() != tt.want {
+				t.Errorf("err = %v\nwant  %s", err, tt.want)
+			}
+		})
+	}
+}

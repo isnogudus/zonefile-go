@@ -69,6 +69,10 @@ type resolver struct {
 	dhcpHosts []dhcpHost
 	// macs maps every MAC address to the host that gives it.
 	macs map[string]config.Pos
+	// pending are the hosts that refer to other hosts, refOwners their
+	// names and aliases.
+	pending   []pendingRef
+	refOwners map[string]bool
 }
 
 // Result is a resolved configuration.
@@ -136,7 +140,8 @@ func (r *resolver) owner(pos config.Pos, what, name, origin string) (string, boo
 // is a config.ErrorList with every problem found; the warnings are
 // returned in either case.
 func Resolve(cfg *config.Config) (*Result, error) {
-	r := &resolver{cfg: cfg, macs: map[string]config.Pos{}, notes: append(config.ErrorList{}, cfg.Notes...)}
+	r := &resolver{cfg: cfg, macs: map[string]config.Pos{}, refOwners: map[string]bool{},
+		notes: append(config.ErrorList{}, cfg.Notes...)}
 	global := defaults().with(cfg.Options)
 
 	var zones []*Zone
@@ -156,6 +161,7 @@ func Resolve(cfg *config.Config) (*Result, error) {
 		zones = append(zones, z)
 		ptrs = append(ptrs, cands...)
 	}
+	r.resolveRefs(zones)
 	zones = append(zones, r.reverse(global, ptrs)...)
 	r.checkNameservers(zones)
 	subnets := r.dhcp(r.dhcpHosts)
@@ -253,7 +259,9 @@ func (r *resolver) forward(cz *config.Zone, global settings) (*Zone, []ptrCandid
 		z.MX = append(z.MX, mx)
 	}
 
-	if p := cz.Options.DHCPProfile; p != nil && (cz.Options.DHCP == nil || !*cz.Options.DHCP) && !r.profileDefined(*p) {
+	zoneDHCP := len(cz.DHCPBlocks) > 0
+	override(&zoneDHCP, cz.Options.DHCP)
+	if p := cz.Options.DHCPProfile; p != nil && !zoneDHCP && !r.profileDefined(*p) {
 		r.warnf(cz.Pos, "zone %s: dhcp-profile %s is not defined in any dhcp block", name, *p)
 	}
 
@@ -277,7 +285,12 @@ func (r *resolver) forward(cz *config.Zone, global settings) (*Zone, []ptrCandid
 // zone, then "no inet" and "no inet6".
 func (r *resolver) hostAddrs(cz *config.Zone, h config.Host) ([]netip.Addr, bool) {
 	var addrs []netip.Addr
+	refs := 0
 	for _, a := range h.Addrs {
+		if a.IsRef() {
+			refs++ // resolved once all zones are, see resolveRefs
+			continue
+		}
 		if !a.IsSuffix() {
 			addrs = append(addrs, a.Addr)
 			continue
@@ -295,10 +308,8 @@ func (r *resolver) hostAddrs(cz *config.Zone, h config.Host) ([]netip.Addr, bool
 			addrs = append(addrs, addr)
 		}
 	}
-	addrs = slices.DeleteFunc(addrs, func(a netip.Addr) bool {
-		return a.Is4() && h.NoInet || a.Is6() && h.NoInet6
-	})
-	if len(addrs) == 0 {
+	addrs = families(cz, h).filter(addrs)
+	if len(addrs) == 0 && refs == 0 {
 		r.errorf(h.Pos, "host %s has no addresses left", h.Name)
 		return nil, false
 	}
@@ -343,6 +354,21 @@ func (r *resolver) host(z *Zone, cz *config.Zone, h config.Host, s settings, own
 	}
 
 	r.hostDHCP(cz, h, name, addrs)
+
+	// Addresses taken from other hosts follow once all zones are resolved.
+	if slices.ContainsFunc(h.Addrs, config.HostAddr.IsRef) {
+		ref := pendingRef{zone: z, own: own, host: h, name: name, aliases: aliases, ttl: ttl, direct: len(addrs), families: families(cz, h)}
+		for _, a := range h.Addrs {
+			if a.IsRef() {
+				ref.refs = append(ref.refs, a.Ref)
+			}
+		}
+		for _, owner := range append([]string{name}, aliases...) {
+			own.other[strings.ToLower(owner)] = h.Pos
+			r.refOwners[strings.ToLower(owner)] = true
+		}
+		r.pending = append(r.pending, ref)
+	}
 
 	var ptrs []ptrCandidate
 	for _, addr := range addrs {
@@ -475,7 +501,7 @@ func (r *resolver) hostDHCP(cz *config.Zone, h config.Host, name string, addrs [
 		r.macs[mac] = h.Pos
 	}
 
-	on := false
+	on := len(cz.DHCPBlocks) > 0
 	override(&on, cz.Options.DHCP)
 	override(&on, h.DHCP)
 	var profile string
@@ -570,6 +596,95 @@ func (r *resolver) checkNameservers(zones []*Zone) {
 			r.errorf(u.pos, "nameserver %s is a CNAME in zone %s; a nameserver needs an A or AAAA record (RFC 2181)", u.name, z)
 		case !addrs[z+" "+name]:
 			r.errorf(u.pos, "nameserver %s has no address: zone %s has no A or AAAA record for it", u.name, z)
+		}
+	}
+}
+
+// pendingRef is a host that takes the addresses of other hosts.
+type pendingRef struct {
+	zone     *Zone
+	own      *owners
+	host     config.Host
+	name     string
+	aliases  []string
+	ttl      uint32
+	refs     []string
+	direct   int // number of addresses of its own
+	families addrFamilies
+}
+
+// addrFamilies are the address families in effect for a host.
+type addrFamilies struct{ inet, inet6 bool }
+
+// families returns the families of h: inet and inet6 on the host override
+// no inet and no inet6 of the zone; without either, both are on.
+func families(cz *config.Zone, h config.Host) addrFamilies {
+	f := addrFamilies{true, true}
+	override(&f.inet, cz.Options.Inet)
+	override(&f.inet6, cz.Options.Inet6)
+	override(&f.inet, h.Inet)
+	override(&f.inet6, h.Inet6)
+	return f
+}
+
+// filter drops the addresses of the families that are off.
+func (f addrFamilies) filter(addrs []netip.Addr) []netip.Addr {
+	return slices.DeleteFunc(addrs, func(a netip.Addr) bool {
+		return a.Is4() && !f.inet || a.Is6() && !f.inet6
+	})
+}
+
+// resolveRefs gives the hosts that refer to other hosts the A and AAAA
+// records of those, after all forward zones are resolved, so that a host
+// may refer to one declared later. The addresses get no PTR records: the
+// host referred to has them. A reference to a host that refers itself is
+// an error, so chains and cycles cannot arise.
+func (r *resolver) resolveRefs(zones []*Zone) {
+	if len(r.pending) == 0 {
+		return
+	}
+	byName := map[string][]netip.Addr{}
+	for _, z := range zones {
+		for _, a := range z.Addresses {
+			key := strings.ToLower(a.Name)
+			byName[key] = append(byName[key], a.Addr)
+		}
+	}
+	for _, p := range r.pending {
+		h := p.host
+		var addrs []netip.Addr
+		ok := true
+		for _, ref := range p.refs {
+			key := strings.ToLower(ref)
+			switch found := byName[key]; {
+			case r.refOwners[key]:
+				r.errorf(h.Pos, "host %s: %s takes its addresses from another host itself", p.name, ref)
+				ok = false
+			case len(found) == 0:
+				r.errorf(h.Pos, "host %s: %s has no address in the configured zones", p.name, ref)
+				ok = false
+			default:
+				addrs = append(addrs, found...)
+			}
+		}
+		if !ok {
+			continue
+		}
+		addrs = p.families.filter(addrs)
+		if len(addrs) == 0 && p.direct == 0 {
+			r.errorf(h.Pos, "host %s has no addresses left", p.name)
+			continue
+		}
+		for _, addr := range addrs {
+			for _, owner := range append([]string{p.name}, p.aliases...) {
+				rec := strings.ToLower(owner) + " " + addr.String()
+				if pos, dup := p.own.records[rec]; dup {
+					r.errorf(h.Pos, "%s %s duplicates the record from %s", owner, addr, pos)
+					continue
+				}
+				p.own.records[rec] = h.Pos
+				p.zone.Addresses = append(p.zone.Addresses, Address{Name: owner, Addr: addr, TTL: p.ttl})
+			}
 		}
 	}
 }

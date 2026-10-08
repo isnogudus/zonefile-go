@@ -104,6 +104,10 @@ type dhcpHost struct {
 // subnetAddr resolves an address of a dhcp block: a suffix against the
 // network, or a full IPv4 address.
 func (r *resolver) subnetAddr(pos config.Pos, n netip.Prefix, a config.HostAddr, what string) (netip.Addr, bool) {
+	if a.IsRef() {
+		r.errorf(pos, "dhcp %s: %s %s: only hosts may refer to the addresses of other hosts", n, what, a.Ref)
+		return netip.Addr{}, false
+	}
 	if a.IsSuffix() {
 		addr, err := applySuffix(n, a.Suffix)
 		if err != nil {

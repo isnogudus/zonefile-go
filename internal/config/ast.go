@@ -44,9 +44,11 @@ type Options struct {
 	Serial      *uint32
 	PTR         *bool
 	// DHCP and DHCPProfile are set by dhcp, no dhcp and dhcp-profile,
-	// which exist only in zones.
+	// Inet and Inet6 by no inet and no inet6; they exist only in zones.
 	DHCP        *bool
 	DHCPProfile *string
+	Inet        *bool
+	Inet6       *bool
 }
 
 type Nameserver struct {
@@ -71,21 +73,32 @@ type Zone struct {
 	MX          []MX
 	// NoMX is set by no mx: the zone has no MX records, not even the
 	// top-level ones.
-	NoMX   bool
-	Hosts  []Host
-	CNAMEs []CNAME
-	SRVs   []SRV
+	NoMX bool
+	// DHCPBlocks are the dhcp blocks in the zone. They are also in
+	// Config.DHCP, and turn dhcp on for the hosts of the zone unless the
+	// zone says no dhcp.
+	DHCPBlocks []*DHCP
+	Hosts      []Host
+	CNAMEs     []CNAME
+	SRVs       []SRV
 }
 
-// HostAddr is either a full address or, if Suffix is not nil, an address
-// suffix such as .37 that is resolved against the networks of the zone.
+// HostAddr is a full address; or, if Suffix is not nil, an address suffix
+// such as .37 that is resolved against the networks of the zone; or, if
+// Ref is not empty, the absolute name of another host whose addresses are
+// taken.
 type HostAddr struct {
 	Addr   netip.Addr
 	Suffix []byte
+	Ref    string
 }
 
 func (a HostAddr) IsSuffix() bool {
 	return a.Suffix != nil
+}
+
+func (a HostAddr) IsRef() bool {
+	return a.Ref != ""
 }
 
 type Host struct {
@@ -95,8 +108,9 @@ type Host struct {
 	Aliases []string
 	TTL     *uint32
 	PTR     *bool
-	NoInet  bool
-	NoInet6 bool
+	// Inet and Inet6 are set by inet, no inet, inet6 and no inet6.
+	Inet  *bool
+	Inet6 *bool
 	// MACs are the hardware addresses given with mac, in lower case.
 	MACs []string
 	// DHCP is set by dhcp and no dhcp on the host, DHCPProfile by
@@ -140,6 +154,9 @@ type DHCP struct {
 	Authoritative *bool
 	DHCPOptions
 	Profiles []*DHCPProfile
+	// implicit is set for a dhcp block in a zone that takes the network of
+	// the zone.
+	implicit bool
 }
 
 // DHCPOptions are the options and lease times of a dhcp block or a profile

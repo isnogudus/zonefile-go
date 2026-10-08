@@ -89,7 +89,7 @@ zone example.com {
 		Aliases: []string{"@", "www"},
 		TTL:     ptr(uint32(3600)),
 		PTR:     ptr(false),
-		NoInet6: true,
+		Inet6:   ptr(false),
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got  %+v\nwant %+v", got, want)
@@ -240,10 +240,20 @@ func TestParseErrors(t *testing.T) {
 			`test.conf:2: "ptr" given twice`}},
 		{"ptr after block", "zone a {\n}\nno ptr\n", []string{
 			`test.conf:3: "no ptr" must come before the first zone or reverse block`}},
+		{"no inet6 at top level", "no inet6\n", []string{
+			`test.conf:1: "no inet6" is only allowed in a zone or on a host`}},
+		{"no inet6 in reverse", "reverse 10.0.0.0/8 {\n\tno inet6\n}\n", []string{
+			`test.conf:2: "no inet6" is not allowed in a reverse block`}},
+		{"zone no inet and no inet6", "zone a {\n\tno inet\n\tno inet6\n}\n", []string{
+			`test.conf:3: "no inet" and "no inet6" together leave no addresses`}},
+		{"zone no inet6 after record", "zone a {\n\thost x 10.0.0.1\n\tno inet6\n}\n", []string{
+			`test.conf:3: "no inet6" must come before the first record`}},
+		{"host inet and no inet", "zone a {\n\thost x 10.0.0.1 inet no inet\n}\n", []string{
+			`test.conf:2: "inet" given twice`}},
 		{"no mx at top level", "no mx\n", []string{
 			`test.conf:1: "no mx" is only allowed in a zone`}},
 		{"no what", "zone a {\n\tno cname\n}\n", []string{
-			`test.conf:2: expected "ptr", "mx" or "dhcp" after "no", got "cname"`}},
+			`test.conf:2: expected "ptr", "mx", "dhcp", "inet" or "inet6" after "no", got "cname"`}},
 		{"zone ptr after record", "zone a {\n\thost x 10.0.0.1\n\tptr\n}\n", []string{
 			`test.conf:3: "ptr" must come before the first record`}},
 		{"no mx after mx", "zone a {\n\tmx m\n\tno mx\n}\n", []string{
@@ -502,5 +512,82 @@ func TestParseHostBlockErrors(t *testing.T) {
 				t.Errorf("err = %v\nwant  %s", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestParseZoneDHCP(t *testing.T) {
+	cfg := mustParse(t, `
+zone haus.home.arpa {
+	network { 192.168.200.0/24 fd00::/64 }
+	dhcp {
+		range .200 .219
+	}
+	host e3dc .13 mac 6c:c3:74:46:42:e3
+}
+zone other.example {
+	network 10.0.0.0/24
+	dhcp {
+		option domain-name override.example
+	}
+}
+`)
+	z := cfg.Zones[0]
+	if len(z.DHCPBlocks) != 1 || z.DHCPBlocks[0].Network.String() != "192.168.200.0/24" ||
+		*z.DHCPBlocks[0].Domain != "haus.home.arpa" || len(z.DHCPBlocks[0].Ranges) != 1 {
+		t.Fatalf("dhcp blocks = %+v", z.DHCPBlocks)
+	}
+	if len(cfg.DHCP) != 2 || cfg.DHCP[0] != z.DHCPBlocks[0] {
+		t.Errorf("Config.DHCP = %v", cfg.DHCP)
+	}
+	if d := cfg.DHCP[1]; *d.Domain != "override.example" {
+		t.Errorf("domain = %q", *d.Domain)
+	}
+}
+
+func TestParseZoneDHCPErrors(t *testing.T) {
+	tests := []struct {
+		name, src, want string
+	}{
+		{"no network", "zone a {\n\tdhcp {\n\t}\n}\n", `test.conf:2: dhcp block in zone "a" needs an IPv4 network statement before it, or a network of its own`},
+		{"ipv6 only", "zone a {\n\tnetwork fd00::/64\n\tdhcp {\n\t}\n}\n", `test.conf:3: dhcp block in zone "a" needs an IPv4 network statement before it, or a network of its own`},
+		{"twice", "zone a {\n\tnetwork 10.0.0.0/24\n\tdhcp {\n\t}\n\tdhcp {\n\t}\n}\n", `test.conf:5: zone "a" already has a dhcp block for its network at test.conf:3; name the network of a further one`},
+		{"named ipv6", "zone a {\n\tdhcp fd00::/64 {\n\t}\n}\n", `test.conf:2: dhcp fd00::/64: dhcpd serves IPv4 networks only`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Parse("test.conf", strings.NewReader(tt.src))
+			if err == nil || !strings.HasPrefix(err.Error(), tt.want) {
+				t.Errorf("err = %v\nwant  %s", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseZoneDHCPNamed(t *testing.T) {
+	cfg := mustParse(t, `
+zone home.arpa {
+	network 192.168.21.0/24
+	dhcp {
+		range .100 .199
+	}
+	dhcp 192.168.100.0/24 {
+		range .100 .199
+	}
+}
+zone nonet.example {
+	dhcp 10.0.0.0/24 {
+	}
+}
+`)
+	z := cfg.Zones[0]
+	if len(z.DHCPBlocks) != 2 || z.DHCPBlocks[1].Network.String() != "192.168.100.0/24" ||
+		*z.DHCPBlocks[1].Domain != "home.arpa" {
+		t.Errorf("home.arpa blocks = %+v", z.DHCPBlocks)
+	}
+	if b := cfg.Zones[1].DHCPBlocks; len(b) != 1 || b[0].Network.String() != "10.0.0.0/24" || *b[0].Domain != "nonet.example" {
+		t.Errorf("nonet blocks = %+v", b)
+	}
+	if len(cfg.DHCP) != 3 {
+		t.Errorf("Config.DHCP has %d blocks, want 3", len(cfg.DHCP))
 	}
 }

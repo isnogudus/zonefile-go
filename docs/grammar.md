@@ -119,8 +119,10 @@ mx-opt        = "priority" NUMBER | "ttl" duration .
 
 zone          = "zone" name "{" NL { [ zone-stmt ] NL } "}" .
 zone-stmt     = setting | ptr | "no" "mx" | dhcp-switch | dhcp-profile
+              | "no" "inet" | "no" "inet6"
               | network | nameserver | mx | host | cname | srv .
-dhcp-switch   = "dhcp" | "no" "dhcp" .
+dhcp-switch   = "dhcp" | "no" "dhcp"
+              | "dhcp" [ NETWORK ] "{" NL { [ dhcp-stmt ] NL } "}" .
 dhcp-profile  = "dhcp-profile" name .
 
 network       = "network" net-list .
@@ -128,13 +130,13 @@ network       = "network" net-list .
 host          = "host" name host-addrs { host-opt }
                 [ "{" NL { [ host-opt { host-opt } ] NL } "}" ] .
 host-addrs    = host-addr | "{" host-addr { [ "," ] host-addr } "}" .
-host-addr     = ADDRESS | SUFFIX .
+host-addr     = ADDRESS | SUFFIX | REF .
 host-opt      = "alias" name-list
               | "ttl" duration
               | "ptr"
               | "no" "ptr"
-              | "no" "inet"
-              | "no" "inet6"
+              | "inet" | "no" "inet"
+              | "inet6" | "no" "inet6"
               | "mac" mac-list
               | "dhcp"
               | "no" "dhcp"
@@ -174,6 +176,7 @@ name          = WORD | STRING .
 value         = WORD | STRING | "{" item { [ "," ] item } "}" .
 duration      = NUMBER [ "s" | "m" | "h" | "d" | "w" ] .
 SUFFIX        = "." OCTET { "." OCTET } .
+REF           = absolute name, ending in "." .
 MAC           = HEX HEX ":" HEX HEX ":" HEX HEX ":" HEX HEX ":" HEX HEX ":" HEX HEX .
 ```
 
@@ -270,7 +273,14 @@ The declared networks also decide which address families a suffix
 produces. A zone with only an IPv4 network gets only A records from
 suffixes, and a zone with only an IPv6 network gets only AAAA records. In a
 zone with both, a host that lacks one family says so with `no inet` or
-`no inet6`; that is a property of the host, not of the zone.
+`no inet6`.
+
+`network` acts on suffixes only. Full addresses and addresses taken from
+other hosts bring their families regardless, so a zone may drop a family
+for all its hosts with `no inet` or `no inet6`, before its first record;
+`inet` or `inet6` on a host turns it on again for that host, as `ptr`
+does for `no ptr`. Both together in one zone are an error, and so is a
+host that is left without addresses.
 
 `network` only says where the hosts of a zone live. It does **not** create
 reverse zones and does not enable PTR records — that is the job of
@@ -311,6 +321,24 @@ host NAME ADDRESS|SUFFIX|{ … } [option …] {
 	…
 }
 ```
+
+An address may also be the absolute name of another host, ending in a
+dot. The host then gets the A and AAAA records of that name, which may be
+a host or an alias in any zone of the configuration, declared before or
+after. A zone whose names must match another one keeps the address in one
+place that way:
+
+```
+zone unifi {
+	host unifi unifi.home.arpa. alias @
+}
+```
+
+`no inet` and `no inet6` apply to the addresses taken over as well. They
+get no PTR records, since the host referred to has them. A reference to a
+name without addresses, or to a host that takes its own addresses from
+another one, is an error; references cannot be chained. Only hosts may
+refer to other hosts, not the addresses in dhcp blocks.
 
 A host with many options may give them in a block instead, one or more
 per line; the addresses stay in the first line. Each option may still be
@@ -422,6 +450,30 @@ zonefile.conf: suffixes for addresses, lists in braces, durations such as
 
 Other options of `dhcp-options(5)` are not supported yet; they can be
 added with a type when needed, so that their values are checked.
+
+#### A dhcp block in a zone
+
+```
+zone haus.home.arpa {
+	network 192.168.200.0/24
+	dhcp {
+		range .200 .219
+	}
+	host e3dc .13 mac 6c:c3:74:46:42:e3
+}
+```
+
+Where a zone and a subnet belong together, the dhcp block may stand in
+the zone. Without a network it serves the IPv4 network of the zone, which
+a `network` statement must declare before it; with one, as in
+`dhcp 192.168.100.0/24 { … }`, it serves that network, which suits a zone
+without `network` or one that serves several subnets. A zone may have one
+block without a network and any number with one. The
+`option domain-name` of each is the zone unless the block gives one. It also turns `dhcp` on for the hosts of
+the zone, so a host with a `mac` needs no `dhcp` of its own; `no dhcp` on
+the host or in the zone wins. Otherwise it is a dhcp block like any
+other: it takes the same statements, inherits from the global block, and
+must not overlap another dhcp block.
 
 #### The global dhcp block
 
