@@ -71,6 +71,9 @@ func main() {
 	}
 	zones := res.Zones
 	if *checkOnly {
+		for _, n := range res.Notes {
+			fmt.Fprintln(os.Stderr, n)
+		}
 		fmt.Fprintln(os.Stderr, "configuration OK")
 		return
 	}

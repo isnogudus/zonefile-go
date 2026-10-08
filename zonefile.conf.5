@@ -1,4 +1,4 @@
-.Dd October 7, 2026
+.Dd October 8, 2026
 .Dt ZONEFILE.CONF 5
 .Os
 .Sh NAME
@@ -330,42 +330,85 @@ from these blocks with
 Addresses in the block may be suffixes relative to
 .Ar network .
 Subnets must not overlap.
+The statements are named as in
+.Xr dhcpd.conf 5
+and
+.Xr dhcp-options 5 ,
+but take addresses as suffixes, lists in braces and durations as above,
+and end without a semicolon.
 The block may contain:
 .Bl -tag -width Ds
 .It Ic range Ar low high
 A range of addresses handed out dynamically.
 It may be given several times; ranges must lie within the network and
 must not overlap.
-.It Ic router Ar address | { address ... }
-.Ic option routers ;
-the addresses must lie within the network.
-.It Ic dns-server Ar address | { address ... }
-.Ic option domain-name-servers .
-.It Ic ntp-server Ar address | { address ... }
-.Ic option ntp-servers .
-.It Ic domain Ar name
-.Ic option domain-name .
-.It Ic search Ar name | { name ... }
-.Ic option domain-search .
-.It Ic lease Ar duration
-.Ic default-lease-time .
-.It Ic max-lease Ar duration
-.Ic max-lease-time ;
-.Ic lease
+.It Ic server-identifier Ar address
+The IPv4 address of this server that
+.Xr dhcpd 8
+sends to the clients, which they use to address it, e.g. to renew a
+lease.
+Only needed if the default, the first address of the interface the request
+arrived on, is not the right one, as with several addresses on one
+interface or a
+.Xr carp 4
+address.
+Not allowed in a profile.
+.It Ic option routers Ar address | { address ... }
+The default gateways; the addresses must lie within the network.
+.It Ic option domain-name-servers Ar address | { address ... }
+The resolvers of the clients.
+.It Ic option ntp-servers Ar address | { address ... }
+The NTP servers.
+.It Ic option domain-name Ar name
+The domain of the clients.
+.It Ic option domain-search Ar name | { name ... }
+The search list of the clients.
+.It Ic default-lease-time Ar duration
+The lease time if the client asks for none.
+.It Ic max-lease-time Ar duration
+The longest lease time;
+.Ic default-lease-time
 must not be longer.
+.Pp
+Other options of
+.Xr dhcp-options 5
+are not supported.
 .It Ic profile Ar name No { ... }
 Options for the hosts that name the profile with
 .Ic dhcp-profile :
 any of the statements above except
-.Ic range .
-Each name may be used once per block; several blocks may define profiles
-of the same name, and a host gets the one of the block that holds its
-address.
+.Ic range
+and
+.Ic server-identifier .
+Each name may be used once per block.
+A profile in a
+.Ic dhcp
+block hides a global profile of the same name for its network.
 A profile that is used becomes a
 .Ic group
 inside the subnet, whose options override those of the subnet for its
 hosts.
 .El
+.It Ic dhcp No { ... }
+The global
+.Ic dhcp
+block, without a network, holds the defaults of all
+.Ic dhcp
+blocks; there may be one.
+It takes the same statements as a
+.Ic dhcp
+block except
+.Ic range .
+Its suffixes are resolved for each subnet, so
+.Ic option domain-name-servers .1
+names the address .1 of every network.
+Profiles in it serve all networks.
+.Pp
+Options are inherited one by one: the global block, then the
+.Ic dhcp
+block, then the profile of a host; each level replaces the options it
+gives, lists as a whole.
+The checks apply to the result for each subnet.
 .Pp
 Every host with a
 .Ic mac
@@ -386,12 +429,21 @@ It is an error if such a host has no IPv4 address in the network of a
 .Ic dhcp
 block, if its fixed address lies in a dynamic range, or if its
 .Ic dhcp-profile
-is not defined in that block.
+is defined neither in that block nor in the global one.
 While dhcp is off for a host, its
 .Ic dhcp-profile
 is kept unused; if no
 .Ic dhcp
 block defines the name at all, zonefile-go warns.
+.Pp
+.Nm zonefile-go Fl n
+also shows notes about profiles that hide a global one or that no host
+uses, and about addresses in
+.Ic option domain-name-servers
+that are not a nameserver of the zone named by
+.Ic option domain-name ,
+if zonefile-go manages that zone and the addresses of all its
+nameservers.
 .El
 .Sh FILES
 .Bl -tag -width Ds
@@ -411,10 +463,10 @@ reverse { 192.168.1.0/24 fd00:1::/64 }
 
 dhcp 192.168.1.0/24 {
 	range .100 .199
-	router .1
-	dns-server .1
-	domain example.com
-	lease 1d
+	option routers .1
+	option domain-name-servers .1
+	option domain-name example.com
+	default-lease-time 1d
 }
 
 zone example.com {
@@ -431,6 +483,7 @@ zone example.com {
 }
 .Ed
 .Sh SEE ALSO
+.Xr dhcp-options 5 ,
 .Xr dhcpd.conf 5 ,
 .Xr pf.conf 5 ,
 .Xr dhcpd 8 ,

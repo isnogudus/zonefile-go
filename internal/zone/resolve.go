@@ -65,6 +65,7 @@ type resolver struct {
 	cfg       *config.Config
 	errs      config.ErrorList
 	warns     config.ErrorList
+	notes     config.ErrorList
 	dhcpHosts []dhcpHost
 	// macs maps every MAC address to the host that gives it.
 	macs map[string]config.Pos
@@ -79,10 +80,17 @@ type Result struct {
 	DHCP []*Subnet
 	// Warnings do not stop the output from being written.
 	Warnings config.ErrorList
+	// Notes point out valid configurations that may not be intended, such
+	// as a profile that hides a global one. zonefile-go shows them with -n.
+	Notes config.ErrorList
 }
 
 func (r *resolver) errorf(pos config.Pos, format string, args ...any) {
 	r.errs = append(r.errs, &config.Error{Pos: pos, Msg: fmt.Sprintf(format, args...)})
+}
+
+func (r *resolver) notef(pos config.Pos, format string, args ...any) {
+	r.notes = append(r.notes, &config.Error{Pos: pos, Msg: "note: " + fmt.Sprintf(format, args...)})
 }
 
 func (r *resolver) warnf(pos config.Pos, format string, args ...any) {
@@ -147,10 +155,11 @@ func Resolve(cfg *config.Config) (*Result, error) {
 	}
 	zones = append(zones, r.reverse(global, ptrs)...)
 	subnets := r.dhcp(r.dhcpHosts)
+	r.checkDHCPNameservers(zones, subnets)
 
-	res := &Result{Zones: zones, DHCP: subnets, Warnings: r.warns}
+	res := &Result{Zones: zones, DHCP: subnets, Warnings: r.warns, Notes: r.notes}
 	if len(r.errs) > 0 {
-		return &Result{Warnings: r.warns}, r.errs
+		return &Result{Warnings: r.warns, Notes: r.notes}, r.errs
 	}
 	return res, nil
 }

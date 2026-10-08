@@ -65,10 +65,10 @@ blocks of the configuration, with a fixed address for every host with a
 ```
 dhcp 192.168.21.0/24 {
 	range .100 .199
-	router .1
-	dns-server .1
-	domain example.com
-	lease 1d
+	option routers .1
+	option domain-name-servers .1
+	option domain-name example.com
+	default-lease-time 1d
 }
 
 zone example.com {

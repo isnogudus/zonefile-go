@@ -14,6 +14,9 @@ import (
 type Subnet struct {
 	Network netip.Prefix
 	Ranges  []Range
+	// ServerID is the address sent as server identifier; invalid if the
+	// dhcpd default is kept.
+	ServerID netip.Addr
 	DHCPOptions
 	// Hosts are the hosts without a profile. Hosts here and in profiles are
 	// sorted by address, and for the same address in the order of the
@@ -22,6 +25,7 @@ type Subnet struct {
 	// Profiles are the profiles of the block in configuration order, with
 	// the hosts that use them.
 	Profiles []*Profile
+	pos      config.Pos
 }
 
 // DHCPOptions are the options of a subnet or a profile. Zero values are
@@ -38,11 +42,13 @@ type DHCPOptions struct {
 	MaxLease uint32
 }
 
-// Profile is a profile of a dhcp block and the hosts that use it.
+// Profile is a profile of a dhcp block or the global dhcp block, resolved
+// for one subnet, and the hosts of that subnet that use it.
 type Profile struct {
 	Name string
 	DHCPOptions
 	Hosts []DHCPHost
+	src   *config.DHCPProfile
 }
 
 type Range struct {
@@ -116,12 +122,13 @@ func (r *resolver) domainName(pos config.Pos, name string) string {
 	return strings.TrimSuffix(abs, ".")
 }
 
-// dhcpOptions resolves the options of a dhcp block or profile.
+// dhcpOptions resolves the options of a dhcp block or profile for the
+// subnet n.
 func (r *resolver) dhcpOptions(pos config.Pos, n netip.Prefix, o config.DHCPOptions) DHCPOptions {
 	var out DHCPOptions
-	out.Routers = r.subnetAddrs(pos, n, o.Routers, "router", true)
-	out.DNSServers = r.subnetAddrs(pos, n, o.DNSServers, "dns-server", false)
-	out.NTPServers = r.subnetAddrs(pos, n, o.NTPServers, "ntp-server", false)
+	out.Routers = r.subnetAddrs(pos, n, o.Routers, "option routers", true)
+	out.DNSServers = r.subnetAddrs(pos, n, o.DNSServers, "option domain-name-servers", false)
+	out.NTPServers = r.subnetAddrs(pos, n, o.NTPServers, "option ntp-servers", false)
 	if o.Domain != nil {
 		out.Domain = r.domainName(pos, *o.Domain)
 	}
@@ -130,15 +137,50 @@ func (r *resolver) dhcpOptions(pos config.Pos, n netip.Prefix, o config.DHCPOpti
 	}
 	override(&out.Lease, o.Lease)
 	override(&out.MaxLease, o.MaxLease)
-	if out.Lease != 0 && out.MaxLease != 0 && out.Lease > out.MaxLease {
-		r.errorf(pos, "dhcp %s: lease (%d) must not be longer than max-lease (%d)", n, out.Lease, out.MaxLease)
-	}
 	return out
 }
 
-// profileDefined reports whether any dhcp block defines a profile name.
+// overlay returns base with every option replaced that set gives; top is
+// set resolved. Lists are replaced as a whole, not merged.
+func overlay(base, top DHCPOptions, set config.DHCPOptions) DHCPOptions {
+	if set.Routers != nil {
+		base.Routers = top.Routers
+	}
+	if set.DNSServers != nil {
+		base.DNSServers = top.DNSServers
+	}
+	if set.NTPServers != nil {
+		base.NTPServers = top.NTPServers
+	}
+	if set.Domain != nil {
+		base.Domain = top.Domain
+	}
+	if set.Search != nil {
+		base.Search = top.Search
+	}
+	if set.Lease != nil {
+		base.Lease = top.Lease
+	}
+	if set.MaxLease != nil {
+		base.MaxLease = top.MaxLease
+	}
+	return base
+}
+
+func (r *resolver) checkLease(pos config.Pos, n netip.Prefix, o DHCPOptions) {
+	if o.Lease != 0 && o.MaxLease != 0 && o.Lease > o.MaxLease {
+		r.errorf(pos, "dhcp %s: default-lease-time (%d) must not be longer than max-lease-time (%d)", n, o.Lease, o.MaxLease)
+	}
+}
+
+// profileDefined reports whether any dhcp block, the global one included,
+// defines a profile name.
 func (r *resolver) profileDefined(name string) bool {
-	for _, d := range r.cfg.DHCP {
+	blocks := r.cfg.DHCP
+	if g := r.cfg.DHCPDefaults; g != nil {
+		blocks = append([]*config.DHCP{g}, blocks...)
+	}
+	for _, d := range blocks {
 		for _, p := range d.Profiles {
 			if p.Name == name {
 				return true
@@ -158,7 +200,7 @@ func (r *resolver) dhcp(hosts []dhcpHost) []*Subnet {
 			continue
 		}
 		n := d.Network
-		s := &Subnet{Network: n}
+		s := &Subnet{Network: n, pos: d.Pos}
 		for _, cr := range d.Ranges {
 			low, ok1 := r.subnetAddr(cr.Pos, n, cr.Low, "range")
 			high, ok2 := r.subnetAddr(cr.Pos, n, cr.High, "range")
@@ -183,14 +225,50 @@ func (r *resolver) dhcp(hosts []dhcpHost) []*Subnet {
 			}
 			s.Ranges = append(s.Ranges, rng)
 		}
-		s.DHCPOptions = r.dhcpOptions(d.Pos, n, d.DHCPOptions)
+		if d.ServerID != nil {
+			s.ServerID, _ = r.subnetAddr(d.Pos, n, *d.ServerID, "server-identifier")
+		}
+		// Defaults, then the block, then the profile.
+		glob := r.cfg.DHCPDefaults
+		var base DHCPOptions
+		if glob != nil {
+			base = r.dhcpOptions(glob.Pos, n, glob.DHCPOptions)
+			if d.ServerID == nil && glob.ServerID != nil {
+				s.ServerID, _ = r.subnetAddr(glob.Pos, n, *glob.ServerID, "server-identifier")
+			}
+		}
+		s.DHCPOptions = overlay(base, r.dhcpOptions(d.Pos, n, d.DHCPOptions), d.DHCPOptions)
+		r.checkLease(d.Pos, n, s.DHCPOptions)
+
+		addProfile := func(cp *config.DHCPProfile) {
+			p := &Profile{Name: cp.Name, DHCPOptions: r.dhcpOptions(cp.Pos, n, cp.DHCPOptions), src: cp}
+			r.checkLease(cp.Pos, n, overlay(s.DHCPOptions, p.DHCPOptions, cp.DHCPOptions))
+			s.Profiles = append(s.Profiles, p)
+		}
+		local := map[string]bool{}
 		for _, cp := range d.Profiles {
-			s.Profiles = append(s.Profiles, &Profile{Name: cp.Name, DHCPOptions: r.dhcpOptions(cp.Pos, n, cp.DHCPOptions)})
+			local[cp.Name] = true
+		}
+		if glob != nil {
+			for _, gp := range glob.Profiles {
+				if !local[gp.Name] {
+					addProfile(gp)
+				}
+			}
+		}
+		for _, cp := range d.Profiles {
+			if glob != nil {
+				if i := slices.IndexFunc(glob.Profiles, func(g *config.DHCPProfile) bool { return g.Name == cp.Name }); i >= 0 {
+					r.notef(cp.Pos, "profile %s in dhcp %s hides the global profile %s at %s", cp.Name, n, cp.Name, glob.Profiles[i].Pos)
+				}
+			}
+			addProfile(cp)
 		}
 		subnets = append(subnets, s)
 	}
 
 	names := map[string]int{}
+	used := map[*config.DHCPProfile]bool{}
 	for _, h := range hosts {
 		inNetwork := false
 		for _, s := range subnets {
@@ -216,10 +294,11 @@ func (r *resolver) dhcp(hosts []dhcpHost) []*Subnet {
 			if h.profile != "" {
 				i := slices.IndexFunc(s.Profiles, func(p *Profile) bool { return p.Name == h.profile })
 				if i < 0 {
-					r.errorf(h.pos, "host %s: dhcp %s has no profile %s", h.name, s.Network, h.profile)
+					r.errorf(h.pos, "host %s: profile %s is defined neither in dhcp %s nor in the global dhcp block", h.name, h.profile, s.Network)
 					continue
 				}
 				dst = &s.Profiles[i].Hosts
+				used[s.Profiles[i].src] = true
 			}
 			base := strings.TrimSuffix(h.name, ".")
 			short, rest, _ := strings.Cut(base, ".")
@@ -240,6 +319,19 @@ func (r *resolver) dhcp(hosts []dhcpHost) []*Subnet {
 		}
 	}
 
+	var all []*config.DHCPProfile
+	if g := r.cfg.DHCPDefaults; g != nil {
+		all = append(all, g.Profiles...)
+	}
+	for _, d := range r.cfg.DHCP {
+		all = append(all, d.Profiles...)
+	}
+	for _, cp := range all {
+		if !used[cp] {
+			r.notef(cp.Pos, "profile %s is not used by any host with dhcp", cp.Name)
+		}
+	}
+
 	// By address; for the same address, in configuration order.
 	byAddr := func(a, b DHCPHost) int { return a.Addrs[0].Compare(b.Addrs[0]) }
 	for _, s := range subnets {
@@ -249,4 +341,71 @@ func (r *resolver) dhcp(hosts []dhcpHost) []*Subnet {
 		}
 	}
 	return subnets
+}
+
+// checkDHCPNameservers adds a note for every DHCP name server that is not
+// a nameserver of the zone given as domain-name, if zonefile-go manages
+// that zone and knows the addresses of all its nameservers. Clients would
+// then ask a resolver that need not know the zone; with a forwarding or
+// filtering resolver that is intended, hence only a note.
+func (r *resolver) checkDHCPNameservers(zones []*Zone, subnets []*Subnet) {
+	byName := map[string]*Zone{}
+	addrs := map[string][]netip.Addr{}
+	for _, z := range zones {
+		if z.Reverse {
+			continue
+		}
+		byName[strings.ToLower(z.Name)] = z
+		for _, a := range z.Addresses {
+			if a.Addr.Is4() {
+				key := strings.ToLower(a.Name)
+				addrs[key] = append(addrs[key], a.Addr)
+			}
+		}
+	}
+
+	check := func(pos config.Pos, where, domain string, servers []netip.Addr) {
+		z := byName[strings.ToLower(domain)+"."]
+		if z == nil || len(servers) == 0 {
+			return
+		}
+		var nsAddrs []netip.Addr
+		var known []string
+		for _, ns := range z.NS {
+			a := addrs[strings.ToLower(ns.Name)]
+			if len(a) == 0 {
+				return // a nameserver outside the managed zones
+			}
+			nsAddrs = append(nsAddrs, a...)
+			s := make([]string, len(a))
+			for i, x := range a {
+				s[i] = x.String()
+			}
+			known = append(known, ns.Name+" is "+strings.Join(s, ", "))
+		}
+		for _, srv := range servers {
+			if !slices.Contains(nsAddrs, srv) {
+				r.notef(pos, "%s: option domain-name-servers %s is not a nameserver of zone %s (%s)",
+					where, srv, z.Name, strings.Join(known, "; "))
+			}
+		}
+	}
+
+	for _, s := range subnets {
+		where := fmt.Sprintf("dhcp %s", s.Network)
+		check(s.pos, where, s.Domain, s.DNSServers)
+		for _, p := range s.Profiles {
+			if len(p.Hosts) == 0 {
+				continue
+			}
+			domain, servers := s.Domain, s.DNSServers
+			if p.Domain != "" {
+				domain = p.Domain
+			}
+			if len(p.DNSServers) > 0 {
+				servers = p.DNSServers
+			}
+			check(p.src.Pos, fmt.Sprintf("%s, profile %s", where, p.Name), domain, servers)
+		}
+	}
 }

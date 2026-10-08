@@ -1,4 +1,4 @@
-.Dd October 7, 2026
+.Dd October 8, 2026
 .Dt ZONEFILE-GO 8
 .Os
 .Sh NAME
@@ -52,6 +52,12 @@ Configtest mode.
 Only check the configuration file for validity and print
 .Dq configuration OK
 to standard error.
+Notes about valid configurations that may not be intended, such as a
+DHCP profile that hides a global one, are shown in this mode only, in the
+form of warnings with
+.Dq note:
+instead of
+.Dq warning: .
 Nothing is written and the serial is not changed.
 .It Fl o Ar path
 Where to write the output.

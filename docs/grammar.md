@@ -148,17 +148,18 @@ srv-opt       = "priority" NUMBER | "weight" NUMBER | "ttl" duration .
 reverse       = "reverse" net-list [ "{" NL { [ reverse-stmt ] NL } "}" ] .
 reverse-stmt  = setting | nameserver .
 
-dhcp          = "dhcp" NETWORK "{" NL { [ dhcp-stmt ] NL } "}" .
+dhcp          = "dhcp" [ NETWORK ] "{" NL { [ dhcp-stmt ] NL } "}" .
 dhcp-stmt     = "range" host-addr host-addr
+              | "server-identifier" host-addr
               | "profile" name "{" NL { [ dhcp-option ] NL } "}"
               | dhcp-option .
-dhcp-option   = "router" host-addrs
-              | "dns-server" host-addrs
-              | "ntp-server" host-addrs
-              | "domain" name
-              | "search" name-list
-              | "lease" duration
-              | "max-lease" duration .
+dhcp-option   = "option" "routers" host-addrs
+              | "option" "domain-name-servers" host-addrs
+              | "option" "ntp-servers" host-addrs
+              | "option" "domain-name" name
+              | "option" "domain-search" name-list
+              | "default-lease-time" duration
+              | "max-lease-time" duration .
 
 addr-list     = ADDRESS | "{" ADDRESS { [ "," ] ADDRESS } "}" .
 name-list     = name    | "{" name    { [ "," ] name    } "}" .
@@ -361,13 +362,13 @@ that is not ours, even without `no ptr`.
 ```
 dhcp 192.168.21.0/24 {
 	range .100 .199
-	router .1
-	dns-server .1
-	domain example.com
-	search { example.com apps.example.com }
-	ntp-server .1
-	lease 1d
-	max-lease 7d
+	option routers .1
+	option domain-name-servers .1
+	option domain-name example.com
+	option domain-search { example.com apps.example.com }
+	option ntp-servers .1
+	default-lease-time 1d
+	max-lease-time 7d
 }
 ```
 
@@ -376,24 +377,58 @@ Describes one IPv4 subnet for the `dhcpd(8)` of OpenBSD, written with
 level beside the zones, since several zones may share a network.
 Addresses may be suffixes relative to its network.
 
-| Statement    | In `dhcpd.conf`                      |
-|--------------|--------------------------------------|
-| `range`      | `range` of dynamic addresses; may be given several times |
-| `router`     | `option routers`                     |
-| `dns-server` | `option domain-name-servers`         |
-| `ntp-server` | `option ntp-servers`                 |
-| `domain`     | `option domain-name`                 |
-| `search`     | `option domain-search`               |
-| `lease`      | `default-lease-time`                 |
-| `max-lease`  | `max-lease-time`                     |
+The statements are named as in `dhcpd.conf(5)` and `dhcp-options(5)`,
+so there is nothing to translate. Only the syntax is that of
+zonefile.conf: suffixes for addresses, lists in braces, durations such as
+`1d`, and no semicolon.
+
+| Statement                     | Meaning                                       |
+|-------------------------------|-----------------------------------------------|
+| `range`                       | dynamic addresses; may be given several times |
+| `server-identifier`           | address the clients use to reach this server; not in a profile |
+| `option routers`              | default gateways; must lie within the network |
+| `option domain-name-servers`  | resolvers of the clients                      |
+| `option ntp-servers`          | NTP servers                                   |
+| `option domain-name`          | domain of the clients                         |
+| `option domain-search`        | search list of the clients                    |
+| `default-lease-time`          | lease time if the client asks for none        |
+| `max-lease-time`              | longest lease time                            |
+
+Other options of `dhcp-options(5)` are not supported yet; they can be
+added with a type when needed, so that their values are checked.
+
+#### The global dhcp block
+
+```
+dhcp {
+	option domain-name-servers .1
+	option domain-name example.com
+	default-lease-time 1d
+	max-lease-time 7d
+}
+```
+
+A `dhcp` block without a network holds the defaults of all dhcp blocks.
+There may be one. It takes the same statements as a dhcp block except
+`range`. Its suffixes are resolved for each subnet, so `nameserver .1`
+is the `.1` of every network; a full address is the same everywhere.
+
+Options are inherited one by one: the global block, then the dhcp block,
+then the profile of a host. Each level replaces an option it gives as a
+whole; lists such as `nameserver { … }` are replaced, not merged. Checks
+apply to the result for each subnet: `option routers` of the global block
+must lie in every network, and `default-lease-time` must not be longer
+than `max-lease-time`
+whichever level gives them. In `dhcpd.conf` the inherited values are
+written into each subnet.
 
 #### Profiles
 
 ```
 dhcp 192.168.21.0/24 {
-	dns-server .1
+	option domain-name-servers .1
 	profile kids {
-		dns-server .53
+		option domain-name-servers .53
 	}
 }
 
@@ -402,18 +437,33 @@ zone example.com {
 }
 ```
 
-A `profile` in a dhcp block holds options for some of its hosts: the
-statements of the block except `range`, with suffixes of its network.
-Hosts and zones name it with `dhcp-profile`; a host gets the profile of the
-dhcp block that holds its address, so blocks may define profiles of the
-same name with different values. In `dhcpd.conf` each profile that is used
-becomes a `group` inside the subnet, whose options override those of the
-subnet for its hosts.
+A `profile` holds options for some hosts: the options of a dhcp block,
+without `range` and `server-identifier`. Hosts and zones name it with
+`dhcp-profile`. A profile may stand in the global dhcp block, where it
+serves every network and is resolved for each, or in a dhcp block, where
+it serves that network. A host gets the profile of the dhcp block that
+holds its address, or else the global one; a profile in a dhcp block
+hides a global one of the same name for that network. In `dhcpd.conf`
+each profile in use becomes a `group` inside the subnet, whose options
+override those of the subnet for its hosts.
 
 `dhcp-profile` rests like a `mac` while dhcp is off for the host. It is an
-error if dhcp is on and the dhcp block has no such profile, and a warning
-if dhcp is off and no dhcp block defines the name at all, to catch typing
-errors early.
+error if dhcp is on and the profile is defined neither in the host's dhcp
+block nor in the global one, and a warning if dhcp is off and no block
+defines the name at all, to catch typing errors early.
+
+`zonefile-go -n` adds notes for valid configurations that may not be
+intended. The normal run does not show them.
+
+- A profile hides a global one of the same name.
+- A profile is used by no host with dhcp.
+- An address in `option domain-name-servers` is not a nameserver of the
+  zone named by `option domain-name`, checked for each subnet and each
+  profile in use after inheritance. The NS names of the zone are resolved
+  through the A records zonefile-go manages; if one of them lies outside,
+  the check is left out for that zone. Clients would ask a resolver that
+  need not know the zone, which is intended for a filtering or forwarding
+  resolver, hence only a note.
 
 Every host with `dhcp` on and a `mac` gets a host declaration in the
 subnet that holds
@@ -426,7 +476,7 @@ Checks:
 
 - dhcp networks are IPv4 and do not overlap; ranges lie within their
   network, start before they end and do not overlap; routers lie within
-  the network; `lease` is not longer than `max-lease`.
+  the network; `default-lease-time` is not longer than `max-lease-time`.
 - `dhcp` on a host needs a `mac`. A host with `dhcp` on and a `mac` needs
   an IPv4 address in the network of a `dhcp` block, and its fixed address
   must not lie in a dynamic range. A MAC address may be used only once,
@@ -474,7 +524,9 @@ New checks, which `zonefile-rs` does not enforce:
   home.arpa` is an error. NSD would reject such a zone file. Targets may
   lie anywhere.
 
-Warnings do not stop the zones from being written. There is one: a
+Warnings do not stop the zones from being written; notes, which point
+out valid but possibly unintended configurations, are shown only by
+`zonefile-go -n`. There is one warning about names: a
 relative name that looks like a full one, because it repeats the zone name
 or ends in a top-level domain (a two-letter country code, `com`, `net`,
 `org`, `arpa`, `local`, `internal` and a few more). Without the trailing

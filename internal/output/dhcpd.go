@@ -84,6 +84,9 @@ func dhcpdHosts(b *bytes.Buffer, indent string, hosts []zone.DHCPHost) {
 
 func dhcpdSubnet(b *bytes.Buffer, s *zone.Subnet) {
 	fmt.Fprintf(b, "subnet %s netmask %s {\n", s.Network.Addr(), netmask(s.Network))
+	if s.ServerID.IsValid() {
+		fmt.Fprintf(b, "\tserver-identifier %s;\n", s.ServerID)
+	}
 	dhcpdOptions(b, "\t", s.DHCPOptions)
 	for _, r := range s.Ranges {
 		fmt.Fprintf(b, "\trange %s %s;\n", r.Low, r.High)

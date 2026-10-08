@@ -201,3 +201,28 @@ func TestNetmask(t *testing.T) {
 		}
 	}
 }
+
+// TestDhcpdKeywords guards the statement names of dhcpd.conf(5) and
+// dhcp-options(5) independently of the golden file, which a careless
+// search and replace could change along with the code.
+func TestDhcpdKeywords(t *testing.T) {
+	cfg, err := config.ParseFile("testdata/small.conf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := zone.Resolve(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := string(Dhcpd(res.DHCP))
+	for _, kw := range []string{
+		"\n\tserver-identifier ", "\n\toption routers ", "\n\toption domain-name-servers ",
+		"\n\toption domain-name ", "\n\tdefault-lease-time ", "\n\trange ",
+		"\n\t\thardware ethernet ", "\n\t\tfixed-address ", "\n\t\toption host-name ",
+		"\n\tgroup {\n",
+	} {
+		if !strings.Contains(out, kw) {
+			t.Errorf("dhcpd.conf lacks %q", strings.TrimSpace(kw))
+		}
+	}
+}

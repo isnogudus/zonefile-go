@@ -16,11 +16,11 @@ import (
 const maxDuration = math.MaxInt32 * time.Second
 
 var keywords = []string{
-	"alias", "cname", "dhcp", "dhcp-profile", "dns-server", "domain", "email", "expire",
-	"host", "inet", "inet6", "lease", "mac", "max-lease", "mx", "nameserver",
-	"network", "no", "ntp-server", "port", "priority", "profile", "ptr", "range",
-	"refresh", "retry", "reverse", "router", "search", "serial", "set", "srv",
-	"ttl", "weight", "yes", "zone",
+	"alias", "cname", "default-lease-time", "dhcp", "dhcp-profile", "email",
+	"expire", "host", "inet", "inet6", "mac", "max-lease-time", "mx",
+	"nameserver", "network", "no", "option", "port", "priority", "profile",
+	"ptr", "range", "refresh", "retry", "reverse", "serial",
+	"server-identifier", "set", "srv", "ttl", "weight", "yes", "zone",
 }
 
 // blockState tracks statement order inside a zone or reverse block.
@@ -764,6 +764,21 @@ func (p *parser) addrList(kw obsdconf.Token, dst *[]HostAddr) bool {
 func (p *parser) dhcp() bool {
 	d := &DHCP{Pos: p.Tok().Pos}
 	p.Next()
+	if p.Tok().Kind == obsdconf.LBrace {
+		// Without a network: the global block with the defaults.
+		if g := p.cfg.DHCPDefaults; g != nil {
+			p.Errorf(d.Pos, "global dhcp block already defined at %s", g.Pos)
+			return false
+		}
+		p.cfg.DHCPDefaults = d
+		return p.Block("global dhcp block", func() bool {
+			if p.Tok().Text == "range" {
+				p.Errorf(p.Tok().Pos, `"range" is not allowed in the global dhcp block`)
+				return false
+			}
+			return p.dhcpStmt(d, "global dhcp block")
+		})
+	}
 	pfx, ok := p.Prefix()
 	if !ok {
 		return false
@@ -778,11 +793,13 @@ func (p *parser) dhcp() bool {
 		return p.Expected(`"{"`)
 	}
 	return p.Block(fmt.Sprintf("dhcp %s", pfx), func() bool {
-		return p.dhcpStmt(d)
+		return p.dhcpStmt(d, "dhcp block")
 	})
 }
 
-func (p *parser) dhcpStmt(d *DHCP) bool {
+// dhcpStmt parses a statement of a dhcp block; where names the block for
+// an unknown statement.
+func (p *parser) dhcpStmt(d *DHCP, where string) bool {
 	kw := p.Tok()
 	switch kw.Text {
 	case "range":
@@ -797,6 +814,10 @@ func (p *parser) dhcpStmt(d *DHCP) bool {
 		}
 		d.Ranges = append(d.Ranges, r)
 		return true
+	case "server-identifier":
+		p.Next()
+		a, ok := p.hostAddr()
+		return ok && once(p, kw, &d.ServerID, a)
 	case "profile":
 		p.Next()
 		name, ok := p.name()
@@ -818,16 +839,22 @@ func (p *parser) dhcpStmt(d *DHCP) bool {
 			return p.dhcpOption(&prof.DHCPOptions, "profile")
 		})
 	}
-	return p.dhcpOption(&d.DHCPOptions, "dhcp block")
+	return p.dhcpOption(&d.DHCPOptions, where)
 }
 
 var dhcpOptionWords = map[string]bool{
-	"router": true, "dns-server": true, "ntp-server": true, "domain": true,
-	"search": true, "lease": true, "max-lease": true,
+	"option": true, "default-lease-time": true, "max-lease-time": true,
 }
 
-// dhcpOption parses one option of a dhcp block or profile into o. where
-// names the block for an unknown statement.
+// dhcpOptionNames are the options of dhcp-options(5) that zonefile-go
+// knows, with suffixes and checks for their values.
+var dhcpOptionNames = []string{
+	"routers", "domain-name-servers", "ntp-servers", "domain-name", "domain-search",
+}
+
+// dhcpOption parses an option or a lease time of a dhcp block or profile
+// into o, named as in dhcpd.conf(5). where names the block for an unknown
+// statement.
 func (p *parser) dhcpOption(o *DHCPOptions, where string) bool {
 	kw := p.Tok()
 	if !dhcpOptionWords[kw.Text] {
@@ -836,18 +863,32 @@ func (p *parser) dhcpOption(o *DHCPOptions, where string) bool {
 	}
 	p.Next()
 	switch kw.Text {
-	case "router":
-		return p.addrList(kw, &o.Routers)
-	case "dns-server":
-		return p.addrList(kw, &o.DNSServers)
-	case "ntp-server":
-		return p.addrList(kw, &o.NTPServers)
-	case "domain":
+	case "default-lease-time":
+		return p.durationValue(kw, &o.Lease, 1)
+	case "max-lease-time":
+		return p.durationValue(kw, &o.MaxLease, 1)
+	}
+
+	t := p.Tok()
+	name, ok := p.Word("option name")
+	if !ok {
+		return false
+	}
+	// once reports the option by its full name, e.g. "option routers".
+	opt := obsdconf.Token{Kind: obsdconf.Word, Text: "option " + name, Pos: kw.Pos}
+	switch name {
+	case "routers":
+		return p.addrList(opt, &o.Routers)
+	case "domain-name-servers":
+		return p.addrList(opt, &o.DNSServers)
+	case "ntp-servers":
+		return p.addrList(opt, &o.NTPServers)
+	case "domain-name":
 		v, ok := p.name()
-		return ok && once(p, kw, &o.Domain, v)
-	case "search":
+		return ok && once(p, opt, &o.Domain, v)
+	case "domain-search":
 		if o.Search != nil {
-			p.Errorf(kw.Pos, "%q given twice", kw.Text)
+			p.Errorf(kw.Pos, "%q given twice", opt.Text)
 			return false
 		}
 		return p.List(func() bool {
@@ -855,9 +896,7 @@ func (p *parser) dhcpOption(o *DHCPOptions, where string) bool {
 			o.Search = append(o.Search, n)
 			return ok
 		})
-	case "lease":
-		return p.durationValue(kw, &o.Lease, 1)
-	default: // max-lease
-		return p.durationValue(kw, &o.MaxLease, 1)
 	}
+	p.Errorf(t.Pos, "unknown dhcp option %q, known are %s", name, strings.Join(dhcpOptionNames, ", "))
+	return false
 }

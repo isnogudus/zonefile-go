@@ -313,13 +313,13 @@ func TestParseDHCP(t *testing.T) {
 dhcp 192.168.21.0/24 {
 	range .100 .199
 	range 192.168.21.220 .230
-	router .1
-	dns-server { .1 192.0.2.53 }
-	domain example.com
-	search { example.com, apps.example.com }
-	ntp-server .1
-	lease 1d
-	max-lease 7d
+	option routers .1
+	option domain-name-servers { .1 192.0.2.53 }
+	option domain-name example.com
+	option domain-search { example.com, apps.example.com }
+	option ntp-servers .1
+	default-lease-time 1d
+	max-lease-time 7d
 }
 zone example.com {
 	host printer .12 mac 00:00:5E:00:53:12 dhcp
@@ -358,10 +358,18 @@ func TestParseDHCPErrors(t *testing.T) {
 	tests := []struct {
 		name, src, want string
 	}{
+		{"server-identifier twice", "dhcp 10.0.0.0/8 {\n\tserver-identifier .1\n\tserver-identifier .2\n}\n", `test.conf:3: "server-identifier" given twice`},
+		{"server-identifier in profile", "dhcp 10.0.0.0/8 {\n\tprofile a {\n\t\tserver-identifier .1\n\t}\n}\n", `test.conf:3: unknown statement "server-identifier" in profile`},
+		{"global block twice", "dhcp {\n}\ndhcp {\n}\n", `test.conf:3: global dhcp block already defined at test.conf:1`},
+		{"range in global block", "dhcp {\n\trange .1 .9\n}\n", `test.conf:2: "range" is not allowed in the global dhcp block`},
+		{"unknown in global block", "dhcp {\n\tgateway .1\n}\n", `test.conf:2: unknown statement "gateway" in global dhcp block`},
 		{"ipv6", "dhcp fd00::/64 {\n}\n", `test.conf:1: dhcp fd00::/64: dhcpd serves IPv4 networks only`},
 		{"no block", "dhcp 10.0.0.0/8\n", `test.conf:1: expected "{", got end of line`},
 		{"unknown", "dhcp 10.0.0.0/8 {\n\tgateway .1\n}\n", `test.conf:2: unknown statement "gateway" in dhcp block`},
-		{"twice", "dhcp 10.0.0.0/8 {\n\trouter .1\n\trouter .2\n}\n", `test.conf:3: "router" given twice`},
+		{"twice", "dhcp 10.0.0.0/8 {\n\toption routers .1\n\toption routers .2\n}\n", `test.conf:3: "option routers" given twice`},
+		{"unknown option", "dhcp 10.0.0.0/8 {\n\toption tftp-server-name boot\n}\n", `test.conf:2: unknown dhcp option "tftp-server-name", known are routers, domain-name-servers, ntp-servers, domain-name, domain-search`},
+		{"option without name", "dhcp 10.0.0.0/8 {\n\toption\n}\n", `test.conf:2: expected option name, got end of line`},
+		{"old word", "dhcp 10.0.0.0/8 {\n\trouter .1\n}\n", `test.conf:2: unknown statement "router" in dhcp block`},
 		{"dhcp twice", "zone a {\n\thost x 10.0.0.1 dhcp no dhcp\n}\n", `test.conf:2: "dhcp" given twice`},
 		{"zone dhcp after record", "zone a {\n\thost x 10.0.0.1\n\tdhcp\n}\n", `test.conf:3: "dhcp" must come before the first record`},
 		{"no dhcp at top level", "no dhcp\n", `test.conf:1: "no dhcp" is only allowed in a zone or on a host`},
@@ -382,13 +390,13 @@ func TestParseDHCPErrors(t *testing.T) {
 func TestParseDHCPProfiles(t *testing.T) {
 	cfg := mustParse(t, `
 dhcp 192.168.21.0/24 {
-	dns-server .1
+	option domain-name-servers .1
 	profile kids {
-		dns-server .53
-		lease 1h
+		option domain-name-servers .53
+		default-lease-time 1h
 	}
 	profile iot {
-		router .254
+		option routers .254
 	}
 }
 zone example.com {

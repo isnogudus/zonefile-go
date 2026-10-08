@@ -24,6 +24,9 @@ type Config struct {
 	Zones       []*Zone
 	Reverse     []*Reverse
 	DHCP        []*DHCP
+	// DHCPDefaults is the dhcp block without a network, if any. Its
+	// Network is the zero Prefix, and it has no Ranges.
+	DHCPDefaults *DHCP
 }
 
 // Options holds the settings of one scope: email, ttl and the other SOA
@@ -126,14 +129,18 @@ type Reverse struct {
 // DHCP is a dhcp block: the settings of one IPv4 subnet for dhcpd. Addresses
 // may be suffixes, resolved against Network.
 type DHCP struct {
-	Pos     Pos
-	Network netip.Prefix
-	Ranges  []DHCPRange
+	Pos      Pos
+	Network  netip.Prefix
+	Ranges   []DHCPRange
+	ServerID *HostAddr
 	DHCPOptions
 	Profiles []*DHCPProfile
 }
 
-// DHCPOptions are the options of a dhcp block or a profile in it.
+// DHCPOptions are the options and lease times of a dhcp block or a profile
+// in it, as option routers, option domain-name-servers, option ntp-servers,
+// option domain-name, option domain-search, default-lease-time and
+// max-lease-time.
 type DHCPOptions struct {
 	Routers    []HostAddr
 	DNSServers []HostAddr

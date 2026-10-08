@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/netip"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -459,10 +460,10 @@ func TestResolveDHCP(t *testing.T) {
 	res, err := resolveAll(t, dhcpHead+`
 dhcp 192.168.21.0/24 {
 	range .100 .199
-	router .1
-	dns-server { .1 192.0.2.53 }
-	domain example.com.
-	lease 1h
+	option routers .1
+	option domain-name-servers { .1 192.0.2.53 }
+	option domain-name example.com.
+	default-lease-time 1h
 }
 zone example.com {
 	network { 192.168.21.0/24 fd00::/64 }
@@ -517,19 +518,21 @@ func TestResolveDHCPErrors(t *testing.T) {
 		{"zone dhcp, host outside network", "dhcp 10.0.0.0/24 {\n}\nzone a.example {\n\tdhcp\n\thost x 10.1.0.1 mac 00:00:5e:00:53:01\n}\n", []string{
 			`test.conf:7: host x.a.example.: dhcp needs an IPv4 address in the network of a dhcp block`}},
 		{"profile missing in subnet", "dhcp 10.0.0.0/24 {\n}\ndhcp 10.0.1.0/24 {\n\tprofile kids {\n\t}\n}\nzone a.example {\n\thost x 10.0.0.1 mac 00:00:5e:00:53:01 dhcp dhcp-profile kids\n}\n", []string{
-			`test.conf:10: host x.a.example.: dhcp 10.0.0.0/24 has no profile kids`}},
+			`test.conf:10: host x.a.example.: profile kids is defined neither in dhcp 10.0.0.0/24 nor in the global dhcp block`}},
+		{"server-identifier ipv6", "dhcp 10.0.0.0/24 {\n\tserver-identifier fd00::1\n}\n", []string{
+			`test.conf:3: dhcp 10.0.0.0/24: server-identifier fd00::1 is not an IPv4 address`}},
 		{"range outside", "dhcp 10.0.0.0/24 {\n\trange 10.0.1.1 10.0.1.9\n}\n", []string{
 			`test.conf:4: dhcp 10.0.0.0/24: range 10.0.1.1-10.0.1.9 is outside the network`}},
 		{"range reversed", "dhcp 10.0.0.0/24 {\n\trange .200 .100\n}\n", []string{
 			`test.conf:4: dhcp 10.0.0.0/24: range 10.0.0.200-10.0.0.100 ends before it starts`}},
 		{"ranges overlap", "dhcp 10.0.0.0/24 {\n\trange .10 .20\n\trange .20 .30\n}\n", []string{
 			`test.conf:5: dhcp 10.0.0.0/24: ranges 10.0.0.20-10.0.0.30 and 10.0.0.10-10.0.0.20 overlap`}},
-		{"router outside", "dhcp 10.0.0.0/24 {\n\trouter 10.1.0.1\n}\n", []string{
-			`test.conf:3: dhcp 10.0.0.0/24: router 10.1.0.1 is outside the network`}},
+		{"router outside", "dhcp 10.0.0.0/24 {\n\toption routers 10.1.0.1\n}\n", []string{
+			`test.conf:3: dhcp 10.0.0.0/24: option routers 10.1.0.1 is outside the network`}},
 		{"networks overlap", "dhcp 10.0.0.0/16 {\n}\ndhcp 10.0.1.0/24 {\n}\n", []string{
 			`test.conf:5: dhcp networks 10.0.1.0/24 and 10.0.0.0/16 overlap`}},
-		{"lease", "dhcp 10.0.0.0/24 {\n\tlease 2d\n\tmax-lease 1d\n}\n", []string{
-			`test.conf:3: dhcp 10.0.0.0/24: lease (172800) must not be longer than max-lease (86400)`}},
+		{"lease", "dhcp 10.0.0.0/24 {\n\tdefault-lease-time 2d\n\tmax-lease-time 1d\n}\n", []string{
+			`test.conf:3: dhcp 10.0.0.0/24: default-lease-time (172800) must not be longer than max-lease-time (86400)`}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -580,12 +583,12 @@ zone b.example {
 func TestResolveDHCPProfiles(t *testing.T) {
 	res, err := resolveAll(t, dhcpHead+`
 dhcp 10.0.0.0/24 {
-	dns-server .1
+	option domain-name-servers .1
 	profile kids {
-		dns-server .53
+		option domain-name-servers .53
 	}
 	profile unused {
-		lease 1h
+		default-lease-time 1h
 	}
 }
 zone a.example {
@@ -659,5 +662,177 @@ zone b.example {
 	want := []string{`test.conf:8: warning: zone a.example.: dhcp-profile kdis is not defined in any dhcp block`}
 	if !reflect.DeepEqual(warns, want) {
 		t.Errorf("warnings:\n  %s\nwant\n  %s", strings.Join(warns, "\n  "), strings.Join(want, "\n  "))
+	}
+}
+
+func TestResolveDHCPDefaults(t *testing.T) {
+	res, err := resolveAll(t, dhcpHead+`
+dhcp {
+	server-identifier .1
+	option domain-name-servers .1
+	option domain-name example.com
+	default-lease-time 1d
+	max-lease-time 7d
+	profile kids {
+		option domain-name-servers .53
+	}
+	profile spare {
+		default-lease-time 1h
+	}
+}
+dhcp 192.168.21.0/24 {
+	option routers .1
+}
+dhcp 192.168.200.0/24 {
+	server-identifier .254
+	option domain-name-servers { .2 .3 }
+	default-lease-time 1h
+	profile kids {
+		option domain-name-servers 192.168.21.53
+	}
+}
+zone a.example {
+	dhcp
+	dhcp-profile kids
+	host tv  192.168.21.20 mac 00:00:5e:00:53:20
+	host cam 192.168.200.20 mac 00:00:5e:00:53:21
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lan, iot := res.DHCP[0], res.DHCP[1]
+	if lan.ServerID.String() != "192.168.21.1" || lan.DNSServers[0].String() != "192.168.21.1" ||
+		lan.Domain != "example.com" || lan.Lease != 86400 || lan.MaxLease != 604800 || lan.Routers[0].String() != "192.168.21.1" {
+		t.Errorf("lan = %+v", lan)
+	}
+	// The block replaces what it gives, lists as a whole, and keeps the rest.
+	if iot.ServerID.String() != "192.168.200.254" || len(iot.DNSServers) != 2 || iot.DNSServers[0].String() != "192.168.200.2" ||
+		iot.Lease != 3600 || iot.MaxLease != 604800 || iot.Domain != "example.com" {
+		t.Errorf("iot = %+v", iot)
+	}
+	// The global profile is resolved per subnet; the local one hides it.
+	if p := lan.Profiles[0]; p.Name != "kids" || p.DNSServers[0].String() != "192.168.21.53" || len(p.Hosts) != 1 {
+		t.Errorf("lan kids = %+v", p)
+	}
+	i := slices.IndexFunc(iot.Profiles, func(p *Profile) bool { return p.Name == "kids" })
+	if p := iot.Profiles[i]; p.src.Pos.Line != 24 || p.DNSServers[0].String() != "192.168.21.53" || len(p.Hosts) != 1 {
+		t.Errorf("iot kids = %+v", p)
+	}
+
+	var notes []string
+	for _, n := range res.Notes {
+		notes = append(notes, n.Error())
+	}
+	want := []string{
+		`test.conf:24: note: profile kids in dhcp 192.168.200.0/24 hides the global profile kids at test.conf:10`,
+		`test.conf:13: note: profile spare is not used by any host with dhcp`,
+	}
+	if !reflect.DeepEqual(notes, want) {
+		t.Errorf("notes:\n  %s\nwant\n  %s", strings.Join(notes, "\n  "), strings.Join(want, "\n  "))
+	}
+	if len(res.Warnings) != 0 {
+		t.Errorf("warnings: %v", res.Warnings)
+	}
+}
+
+func TestResolveDHCPDefaultErrors(t *testing.T) {
+	tests := []struct {
+		name, src string
+		want      []string
+	}{
+		{"global router outside", "dhcp {\n\toption routers 10.0.0.1\n}\ndhcp 10.0.0.0/24 {\n}\ndhcp 10.0.1.0/24 {\n}\n", []string{
+			`test.conf:3: dhcp 10.0.1.0/24: option routers 10.0.0.1 is outside the network`}},
+		{"lease from defaults, max-lease from block", "dhcp {\n\tdefault-lease-time 1d\n}\ndhcp 10.0.0.0/24 {\n\tmax-lease-time 1h\n}\n", []string{
+			`test.conf:6: dhcp 10.0.0.0/24: default-lease-time (86400) must not be longer than max-lease-time (3600)`}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := resolveAll(t, dhcpHead+tt.src)
+			var list config.ErrorList
+			if !errors.As(err, &list) {
+				t.Fatalf("err = %v, want ErrorList", err)
+			}
+			var got []string
+			for _, e := range list {
+				got = append(got, e.Error())
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("got\n  %s\nwant\n  %s", strings.Join(got, "\n  "), strings.Join(tt.want, "\n  "))
+			}
+		})
+	}
+}
+
+func TestResolveDHCPNameserverNotes(t *testing.T) {
+	res, err := resolveAll(t, `
+email admin@example.com
+nameserver ns1.example.com.
+dhcp {
+	option domain-name-servers .1
+	option domain-name example.com
+	profile kids {
+		option domain-name-servers .53
+	}
+	profile other {
+		option domain-name other.example
+		option domain-name-servers .53
+	}
+}
+dhcp 192.168.21.0/24 {
+}
+dhcp 192.168.22.0/24 {
+	option domain-name-servers 192.0.2.53
+}
+zone example.com {
+	host ns1 192.168.21.1
+	host tv  192.168.21.20 mac 00:00:5e:00:53:20 dhcp dhcp-profile kids
+	host pc  192.168.21.30 mac 00:00:5e:00:53:30 dhcp dhcp-profile other
+}
+zone ext.example {
+	nameserver ns.elsewhere.example.
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, n := range res.Notes {
+		if strings.Contains(n.Msg, "domain-name-servers") {
+			got = append(got, n.Error())
+		}
+	}
+	want := []string{
+		// The LAN gets ns1 itself: no note. The second network hands out a
+		// resolver outside: note. kids has a filtering resolver: note.
+		// other is for a zone that zonefile-go does not manage: no note.
+		`test.conf:7: note: dhcp 192.168.21.0/24, profile kids: option domain-name-servers 192.168.21.53 is not a nameserver of zone example.com. (ns1.example.com. is 192.168.21.1)`,
+		`test.conf:17: note: dhcp 192.168.22.0/24: option domain-name-servers 192.0.2.53 is not a nameserver of zone example.com. (ns1.example.com. is 192.168.21.1)`,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("notes:\n  %s\nwant\n  %s", strings.Join(got, "\n  "), strings.Join(want, "\n  "))
+	}
+}
+
+func TestResolveDHCPNameserverUnknownNS(t *testing.T) {
+	// A nameserver of the zone outside the managed zones: no check.
+	res, err := resolveAll(t, `
+email admin@example.com
+nameserver { ns1.example.com. ns2.elsewhere.example. }
+dhcp 192.168.21.0/24 {
+	option domain-name-servers 192.168.21.53
+	option domain-name example.com
+}
+zone example.com {
+	host ns1 192.168.21.1
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range res.Notes {
+		if strings.Contains(n.Msg, "domain-name-servers") {
+			t.Errorf("unexpected note: %v", n)
+		}
 	}
 }
