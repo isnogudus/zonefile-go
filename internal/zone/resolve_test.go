@@ -1146,3 +1146,23 @@ func TestResolveZoneDHCPOverlap(t *testing.T) {
 		})
 	}
 }
+
+func TestResolveDHCPAtOutsideZone(t *testing.T) {
+	for _, src := range []string{
+		"dhcp 10.0.0.0/24 {\n\toption domain-search @\n}\n",
+		"dhcp {\n\toption domain-name @\n}\ndhcp 10.0.0.0/24 {\n}\n",
+	} {
+		_, err := resolveAll(t, dhcpHead+src)
+		if err == nil || !strings.Contains(err.Error(), `test.conf:3: "@" is only allowed in a dhcp block in a zone`) {
+			t.Errorf("%q: err = %v", src, err)
+		}
+	}
+	// In a zone it becomes the zone, trailing dots are dropped.
+	res, err := resolveAll(t, dhcpHead+"zone home.arpa {\n\tnetwork 10.0.0.0/24\n\tdhcp {\n\t\toption domain-search { @ iot.home.arpa. }\n\t}\n}\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := res.DHCP[0].Search; !reflect.DeepEqual(got, []string{"home.arpa", "iot.home.arpa"}) {
+		t.Errorf("search = %v", got)
+	}
+}

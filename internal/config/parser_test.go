@@ -591,3 +591,24 @@ zone nonet.example {
 		t.Errorf("Config.DHCP has %d blocks, want 3", len(cfg.DHCP))
 	}
 }
+
+func TestParseZoneDHCPAt(t *testing.T) {
+	cfg := mustParse(t, `
+zone home.arpa {
+	network 192.168.21.0/24
+	dhcp {
+		option domain-search { @ iot.home.arpa. }
+		dhcp-profile kids {
+			option domain-name @
+		}
+	}
+}
+`)
+	d := cfg.Zones[0].DHCPBlocks[0]
+	if !reflect.DeepEqual(d.Search, []string{"home.arpa", "iot.home.arpa."}) || *d.Domain != "home.arpa" {
+		t.Errorf("block = %+v", d.DHCPOptions)
+	}
+	if p := d.Profiles[0]; *p.Domain != "home.arpa" {
+		t.Errorf("profile domain = %q", *p.Domain)
+	}
+}

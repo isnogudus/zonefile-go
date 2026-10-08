@@ -998,9 +998,25 @@ func (p *parser) zoneDHCP(z *Zone) bool {
 	ok := p.Block(fmt.Sprintf("dhcp in zone %q", z.Name), func() bool {
 		return p.dhcpStmt(d, "dhcp block")
 	})
+	zone := strings.TrimSuffix(z.Name, ".")
 	if d.Domain == nil {
-		domain := strings.TrimSuffix(z.Name, ".")
-		d.Domain = &domain
+		d.Domain = &zone
+	}
+	atZone(&d.DHCPOptions, zone)
+	for _, prof := range d.Profiles {
+		atZone(&prof.DHCPOptions, zone)
 	}
 	return ok
+}
+
+// atZone replaces @ in domain-name and domain-search with the zone.
+func atZone(o *DHCPOptions, zone string) {
+	if o.Domain != nil && *o.Domain == "@" {
+		o.Domain = &zone
+	}
+	for i, s := range o.Search {
+		if s == "@" {
+			o.Search[i] = zone
+		}
+	}
 }

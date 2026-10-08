@@ -142,6 +142,11 @@ func (r *resolver) subnetAddrs(pos config.Pos, n netip.Prefix, list []config.Hos
 // domainName checks a name for domain or search and returns it without
 // the trailing dot.
 func (r *resolver) domainName(pos config.Pos, name string) string {
+	if name == "@" {
+		// A dhcp block in a zone has replaced it with the zone already.
+		r.errorf(pos, `"@" is only allowed in a dhcp block in a zone`)
+		return name
+	}
 	abs := strings.TrimSuffix(name, ".") + "."
 	if err := validName(abs); err != nil {
 		r.errorf(pos, "%v", err)

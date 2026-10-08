@@ -469,7 +469,12 @@ a `network` statement must declare before it; with one, as in
 `dhcp 192.168.100.0/24 { … }`, it serves that network, which suits a zone
 without `network` or one that serves several subnets. A zone may have one
 block without a network and any number with one. The
-`option domain-name` of each is the zone unless the block gives one. It also turns `dhcp` on for the hosts of
+`option domain-name` of each is the zone unless the block gives one.
+
+In these blocks and their profiles, `@` in `option domain-name` and
+`option domain-search` stands for the zone, as in `option domain-search
+{ @ iot.home.arpa }`. Other names stay absolute, with or without a
+trailing dot, as in `dhcpd.conf`; outside a zone, `@` is an error. It also turns `dhcp` on for the hosts of
 the zone, so a host with a `mac` needs no `dhcp` of its own; `no dhcp` on
 the host or in the zone wins. Otherwise it is a dhcp block like any
 other: it takes the same statements, inherits from the global block, and

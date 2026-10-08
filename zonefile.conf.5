@@ -238,6 +238,13 @@ on for the hosts of the zone;
 in the zone or on a host wins.
 A zone may have one such block without a network, and any number with
 one.
+In these blocks,
+.Sq @
+in
+.Ic option domain-name
+and
+.Ic option domain-search
+stands for the zone; other names are absolute.
 .It Ic no inet | no inet6
 Drop the IPv4 or IPv6 addresses of all hosts of the zone, whether
 suffixes, full addresses or taken from other hosts.
