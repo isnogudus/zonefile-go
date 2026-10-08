@@ -295,7 +295,7 @@ The options may also be given in a block after the addresses, one or more
 per line; each still only once.
 An address may also be the absolute name of a host or alias of the
 configuration, ending in a dot, such as
-.Sq unifi.home.arpa. ;
+.Sq unifi.home.arpa.\& ;
 the host then gets its A and AAAA records, without PTR records.
 .Ic no inet
 and
@@ -512,7 +512,8 @@ Every host with a
 .Ic mac
 and
 .Ic dhcp
-on, given on the host or in its zone, gets a host declaration in the subnet that holds its IPv4 address, with
+on, given on the host or in its zone, gets a host declaration in the
+subnet that holds its IPv4 address, with
 .Ic hardware ethernet ,
 .Ic fixed-address
 and
