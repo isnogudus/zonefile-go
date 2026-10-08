@@ -405,8 +405,9 @@ func (r *resolver) dhcp(hosts []dhcpHost) []*Subnet {
 // checkDHCPNameservers adds a note for every DHCP name server that is not
 // a nameserver of the zone given as domain-name, if zonefile-go manages
 // that zone and knows the addresses of all its nameservers. Clients would
-// then ask a resolver that need not know the zone; with a forwarding or
-// filtering resolver that is intended, hence only a note.
+// then ask a resolver that need not know the zone, often because unbound
+// does not listen on that address; with a forwarding or filtering
+// resolver it is intended, hence only a note.
 func (r *resolver) checkDHCPNameservers(zones []*Zone, subnets []*Subnet) {
 	byName := map[string]*Zone{}
 	addrs := map[string][]netip.Addr{}
@@ -440,12 +441,12 @@ func (r *resolver) checkDHCPNameservers(zones []*Zone, subnets []*Subnet) {
 			for i, x := range a {
 				s[i] = x.String()
 			}
-			known = append(known, ns.Name+" is "+strings.Join(s, ", "))
+			known = append(known, ns.Name+" ("+strings.Join(s, ", ")+")")
 		}
 		for _, srv := range servers {
 			if !slices.Contains(nsAddrs, srv) {
-				r.notef(pos, "%s: option domain-name-servers %s is not a nameserver of zone %s (%s)",
-					where, srv, z.Name, strings.Join(known, "; "))
+				r.notef(pos, "%s: clients get %s as resolver, but the nameservers of zone %s are %s; make sure a resolver for the zone listens there",
+					where, srv, z.Name, strings.Join(known, ", "))
 			}
 		}
 	}

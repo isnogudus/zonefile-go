@@ -566,8 +566,9 @@ intended. The normal run does not show them.
   profile in use after inheritance. The NS names of the zone are resolved
   through the A records zonefile-go manages; if one of them lies outside,
   the check is left out for that zone. Clients would ask a resolver that
-  need not know the zone, which is intended for a filtering or forwarding
-  resolver, hence only a note.
+  need not know the zone, often because unbound does not listen on that
+  address. For a filtering or forwarding resolver that is intended, hence
+  only a note.
 
 Every host with `dhcp` on and a `mac` gets a host declaration in the
 subnet that holds

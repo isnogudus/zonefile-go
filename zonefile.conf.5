@@ -548,6 +548,8 @@ that are not a nameserver of the zone named by
 .Ic option domain-name ,
 if zonefile-go manages that zone and the addresses of all its
 nameservers.
+Such a resolver need not know the zone; often unbound does not listen on
+that address.
 .El
 .Sh FILES
 .Bl -tag -width Ds

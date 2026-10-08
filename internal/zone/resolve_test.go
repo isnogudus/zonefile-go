@@ -800,7 +800,7 @@ zone ext.example {
 	}
 	var got []string
 	for _, n := range res.Notes {
-		if strings.Contains(n.Msg, "domain-name-servers") {
+		if strings.Contains(n.Msg, "as resolver") {
 			got = append(got, n.Error())
 		}
 	}
@@ -808,8 +808,8 @@ zone ext.example {
 		// The LAN gets ns1 itself: no note. The second network hands out a
 		// resolver outside: note. kids has a filtering resolver: note.
 		// other is for a zone that zonefile-go does not manage: no note.
-		`test.conf:7: note: dhcp 192.168.21.0/24, dhcp-profile kids: option domain-name-servers 192.168.21.53 is not a nameserver of zone example.com. (ns1.example.com. is 192.168.21.1)`,
-		`test.conf:17: note: dhcp 192.168.22.0/24: option domain-name-servers 192.0.2.53 is not a nameserver of zone example.com. (ns1.example.com. is 192.168.21.1)`,
+		`test.conf:7: note: dhcp 192.168.21.0/24, dhcp-profile kids: clients get 192.168.21.53 as resolver, but the nameservers of zone example.com. are ns1.example.com. (192.168.21.1); make sure a resolver for the zone listens there`,
+		`test.conf:17: note: dhcp 192.168.22.0/24: clients get 192.0.2.53 as resolver, but the nameservers of zone example.com. are ns1.example.com. (192.168.21.1); make sure a resolver for the zone listens there`,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("notes:\n  %s\nwant\n  %s", strings.Join(got, "\n  "), strings.Join(want, "\n  "))
@@ -833,7 +833,7 @@ zone example.com {
 		t.Fatal(err)
 	}
 	for _, n := range res.Notes {
-		if strings.Contains(n.Msg, "domain-name-servers") {
+		if strings.Contains(n.Msg, "as resolver") {
 			t.Errorf("unexpected note: %v", n)
 		}
 	}
