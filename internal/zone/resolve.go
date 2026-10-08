@@ -96,12 +96,23 @@ func (r *resolver) errorf(pos config.Pos, format string, args ...any) {
 	r.errs = append(r.errs, &config.Error{Pos: pos, Msg: fmt.Sprintf(format, args...)})
 }
 
+// notef and warnf add a note or warning once, also when a global value is
+// checked for each subnet.
 func (r *resolver) notef(pos config.Pos, format string, args ...any) {
-	r.notes = append(r.notes, &config.Error{Pos: pos, Msg: "note: " + fmt.Sprintf(format, args...)})
+	r.notes = addOnce(r.notes, &config.Error{Pos: pos, Msg: "note: " + fmt.Sprintf(format, args...)})
 }
 
 func (r *resolver) warnf(pos config.Pos, format string, args ...any) {
-	r.warns = append(r.warns, &config.Error{Pos: pos, Msg: "warning: " + fmt.Sprintf(format, args...)})
+	r.warns = addOnce(r.warns, &config.Error{Pos: pos, Msg: "warning: " + fmt.Sprintf(format, args...)})
+}
+
+func addOnce(list config.ErrorList, e *config.Error) config.ErrorList {
+	for _, o := range list {
+		if o.Pos == e.Pos && o.Msg == e.Msg {
+			return list
+		}
+	}
+	return append(list, e)
 }
 
 // name makes name absolute relative to origin and validates it. A

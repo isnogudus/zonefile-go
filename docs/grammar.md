@@ -180,7 +180,12 @@ REF           = absolute name, ending in "." .
 MAC           = HEX HEX ":" HEX HEX ":" HEX HEX ":" HEX HEX ":" HEX HEX ":" HEX HEX .
 ```
 
-The opening `{` of a block has to be on the same line as its keyword.
+The opening `{` of a block has to be on the same line as its keyword. As
+in `httpd.conf(5)`, a block with one statement may stand on one line, as
+in `host tv .20 { dhcp-profile kids }`, and so may an empty block, `{}`
+or `{ }`. Otherwise the statements start on the line after the brace; a
+second statement on the line of the brace is an error. (The options of a
+`host` count as one statement.)
 Options of `host`, `mx`, `srv` and `nameserver` can be given in any order,
 but each only once.
 
@@ -471,6 +476,11 @@ without `network` or one that serves several subnets. A zone may have one
 block without a network and any number with one. The
 `option domain-name` of each is the zone unless the block gives one.
 
+A subnet always has a block, if only an empty one: `dhcp {}` serves the
+network of the zone and `dhcp 192.168.100.0/24 {}` another one, both with
+the settings of the global block only. `dhcp` alone in a zone is the
+switch that turns dhcp on for its hosts.
+
 In these blocks and their profiles, `@` in `option domain-name` and
 `option domain-search` stands for the zone, as in `option domain-search
 { @ iot.home.arpa }`. Other names stay absolute, with or without a
@@ -625,7 +635,10 @@ New checks, which `zonefile-rs` does not enforce:
 
 Warnings do not stop the zones from being written; notes, which point
 out valid but possibly unintended configurations, are shown only by
-`zonefile-go -n`. There is one warning about names: a
+`zonefile-go -n`. A name of only one label in `option domain-name` or
+`option domain-search`, such as `iot`, gets a warning, since it would be
+a top-level domain; the full name, or `@` in a dhcp block of a zone, is
+meant. The other warning about names is a
 relative name that looks like a full one, because it repeats the zone name
 or ends in a top-level domain (a two-letter country code, `com`, `net`,
 `org`, `arpa`, `local`, `internal` and a few more). Without the trailing

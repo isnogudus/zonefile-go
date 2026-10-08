@@ -139,9 +139,10 @@ func (r *resolver) subnetAddrs(pos config.Pos, n netip.Prefix, list []config.Hos
 	return out
 }
 
-// domainName checks a name for domain or search and returns it without
-// the trailing dot.
-func (r *resolver) domainName(pos config.Pos, name string) string {
+// domainName checks a name for domain-name or domain-search, named by
+// what, and returns it without the trailing dot. A single label is almost
+// never meant as a top-level domain, so it gets a warning.
+func (r *resolver) domainName(pos config.Pos, what, name string) string {
 	if name == "@" {
 		// A dhcp block in a zone has replaced it with the zone already.
 		r.errorf(pos, `"@" is only allowed in a dhcp block in a zone`)
@@ -150,6 +151,8 @@ func (r *resolver) domainName(pos config.Pos, name string) string {
 	abs := strings.TrimSuffix(name, ".") + "."
 	if err := validName(abs); err != nil {
 		r.errorf(pos, "%v", err)
+	} else if !strings.Contains(strings.TrimSuffix(abs, "."), ".") {
+		r.warnf(pos, "%s %s is a single label, so a top-level domain; give the full name, or @ for the zone in a dhcp block of a zone", what, strings.TrimSuffix(abs, "."))
 	}
 	return strings.TrimSuffix(abs, ".")
 }
@@ -165,10 +168,10 @@ func (r *resolver) dhcpOptions(pos config.Pos, n netip.Prefix, o config.DHCPOpti
 	override(&out.AutoproxyScript, o.AutoproxyScript)
 	out.GetLeaseHostnames = o.GetLeaseHostnames
 	if o.Domain != nil {
-		out.Domain = r.domainName(pos, *o.Domain)
+		out.Domain = r.domainName(pos, "option domain-name", *o.Domain)
 	}
 	for _, name := range o.Search {
-		out.Search = append(out.Search, r.domainName(pos, name))
+		out.Search = append(out.Search, r.domainName(pos, "option domain-search", name))
 	}
 	override(&out.Lease, o.Lease)
 	override(&out.MaxLease, o.MaxLease)

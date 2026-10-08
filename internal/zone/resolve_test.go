@@ -1166,3 +1166,54 @@ func TestResolveDHCPAtOutsideZone(t *testing.T) {
 		t.Errorf("search = %v", got)
 	}
 }
+
+func TestResolveDHCPSingleLabelWarning(t *testing.T) {
+	res, err := resolveAll(t, dhcpHead+`
+dhcp {
+	option domain-search lan
+}
+dhcp 10.0.0.0/24 {
+}
+dhcp 10.0.1.0/24 {
+	option domain-name home.arpa
+}
+zone iot.home.arpa {
+	network 10.0.2.0/24
+	dhcp {
+		option domain-search { @ iot }
+	}
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, w := range res.Warnings {
+		got = append(got, w.Error())
+	}
+	// The global block is checked for each subnet, but warns once.
+	want := []string{
+		`test.conf:4: warning: option domain-search lan is a single label, so a top-level domain; give the full name, or @ for the zone in a dhcp block of a zone`,
+		`test.conf:14: warning: option domain-search iot is a single label, so a top-level domain; give the full name, or @ for the zone in a dhcp block of a zone`,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("warnings:\n  %s\nwant\n  %s", strings.Join(got, "\n  "), strings.Join(want, "\n  "))
+	}
+}
+
+func TestResolveEmptyDHCPBlocks(t *testing.T) {
+	res, err := resolveAll(t, dhcpHead+`
+dhcp {}
+dhcp 10.0.0.0/24 {}
+zone a.example {
+	network 10.0.1.0/24
+	dhcp { }
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.DHCP) != 2 || res.DHCP[1].Domain != "a.example" {
+		t.Errorf("dhcp = %+v", res.DHCP)
+	}
+}

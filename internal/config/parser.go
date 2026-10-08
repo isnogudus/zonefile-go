@@ -995,6 +995,9 @@ func (p *parser) zoneDHCP(z *Zone) bool {
 	d := &DHCP{Pos: kw.Pos, Network: v4, implicit: !named}
 	z.DHCPBlocks = append(z.DHCPBlocks, d)
 	p.cfg.DHCP = append(p.cfg.DHCP, d)
+	if p.Tok().Kind != obsdconf.LBrace {
+		return p.Expected(`"{"`)
+	}
 	ok := p.Block(fmt.Sprintf("dhcp in zone %q", z.Name), func() bool {
 		return p.dhcpStmt(d, "dhcp block")
 	})

@@ -65,6 +65,14 @@ A block, such as
 .Ic zone ,
 opens with a curly brace at the end of the line and closes with one on a
 line of its own.
+As in
+.Xr httpd.conf 5 ,
+a block with one statement may stand on one line, as in
+.Sq host tv .20 { dhcp-profile kids } ,
+and so may an empty block,
+.Sq {}
+or
+.Sq { } .
 .Pp
 Durations are given in seconds, or as numbers with the units
 .Cm s ,
@@ -245,6 +253,8 @@ in
 and
 .Ic option domain-search
 stands for the zone; other names are absolute.
+A name of a single label there gets a warning, since it would be a
+top-level domain.
 .It Ic no inet | no inet6
 Drop the IPv4 or IPv6 addresses of all hosts of the zone, whether
 suffixes, full addresses or taken from other hosts.

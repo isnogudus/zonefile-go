@@ -374,7 +374,6 @@ func TestParseDHCPErrors(t *testing.T) {
 		{"range in global block", "dhcp {\n\trange .1 .9\n}\n", `test.conf:2: "range" is not allowed in the global dhcp block`},
 		{"unknown in global block", "dhcp {\n\tgateway .1\n}\n", `test.conf:2: unknown statement "gateway" in global dhcp block`},
 		{"ipv6", "dhcp fd00::/64 {\n}\n", `test.conf:1: dhcp fd00::/64: dhcpd serves IPv4 networks only`},
-		{"no block", "dhcp 10.0.0.0/8\n", `test.conf:1: expected "{", got end of line`},
 		{"unknown", "dhcp 10.0.0.0/8 {\n\tgateway .1\n}\n", `test.conf:2: unknown statement "gateway" in dhcp block`},
 		{"twice", "dhcp 10.0.0.0/8 {\n\toption routers .1\n\toption routers .2\n}\n", `test.conf:3: "option routers" given twice`},
 		{"unknown option", "dhcp 10.0.0.0/8 {\n\toption tftp-server-name boot\n}\n", `test.conf:2: unknown dhcp option "tftp-server-name", known are routers, domain-name-servers, ntp-servers, smtp-server, domain-name, domain-search, autoproxy-script`},
@@ -610,5 +609,68 @@ zone home.arpa {
 	}
 	if p := d.Profiles[0]; *p.Domain != "home.arpa" {
 		t.Errorf("profile domain = %q", *p.Domain)
+	}
+}
+
+func TestParseDHCPNeedsBlock(t *testing.T) {
+	cfg := mustParse(t, `
+dhcp 10.0.9.0/24 {}
+dhcp 10.0.8.0/24 { range .100 .199 }
+zone home.arpa {
+	network 192.168.21.0/24
+	dhcp {}
+	dhcp 192.168.100.0/24 {}
+}
+zone haus.home.arpa {
+	dhcp
+	host e3dc 10.0.9.13 mac 6c:c3:74:46:42:e3
+}
+`)
+	if len(cfg.DHCP) != 4 || len(cfg.DHCP[1].Ranges) != 1 {
+		t.Fatalf("dhcp blocks = %+v", cfg.DHCP)
+	}
+	if b := cfg.Zones[0].DHCPBlocks; len(b) != 2 || *b[1].Domain != "home.arpa" {
+		t.Errorf("home.arpa blocks = %+v", b)
+	}
+	// dhcp alone in a zone is the switch.
+	if z := cfg.Zones[1]; len(z.DHCPBlocks) != 0 || z.Options.DHCP == nil || !*z.Options.DHCP {
+		t.Errorf("haus = %+v", z)
+	}
+	for _, src := range []string{"dhcp 10.0.0.0/24\n", "zone a {\n\tdhcp 10.0.0.0/24\n}\n"} {
+		_, err := Parse("test.conf", strings.NewReader(src))
+		if err == nil || !strings.Contains(err.Error(), `expected "{", got end of line`) {
+			t.Errorf("%q: err = %v", src, err)
+		}
+	}
+}
+
+func TestParseOneLineBlocks(t *testing.T) {
+	cfg := mustParse(t, `
+zone tiny.example { host www 10.0.0.1 }
+zone example.com {
+	host tv .20 { dhcp-profile kids }
+	host pc .30 { alias desk ttl 1h }
+}
+reverse 10.0.0.0/8 { ttl 1d }
+`)
+	if h := cfg.Zones[0].Hosts; len(h) != 1 || h[0].Name != "www" {
+		t.Errorf("tiny hosts = %+v", h)
+	}
+	hs := cfg.Zones[1].Hosts
+	if *hs[0].DHCPProfile != "kids" || hs[1].Aliases[0] != "desk" || *hs[1].TTL != 3600 {
+		t.Errorf("hosts = %+v", hs)
+	}
+	if *cfg.Reverse[0].Options.TTL != 86400 {
+		t.Errorf("reverse ttl = %v", cfg.Reverse[0].Options.TTL)
+	}
+	// The options of a host may share a line, so a second host there reads
+	// as one of its options.
+	_, err := Parse("test.conf", strings.NewReader("zone a { host x 10.0.0.1 host y 10.0.0.2 }\n"))
+	if err == nil || err.Error() != `test.conf:1: host: unknown option "host"` {
+		t.Errorf("two hosts: err = %v", err)
+	}
+	_, err = Parse("test.conf", strings.NewReader("reverse 10.0.0.0/8 { ttl 1d nameserver ns.example. }\n"))
+	if err == nil || !strings.Contains(err.Error(), `a block on one line holds one statement`) {
+		t.Errorf("two statements: err = %v", err)
 	}
 }
