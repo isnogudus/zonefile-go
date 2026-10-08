@@ -76,8 +76,11 @@ type Result struct {
 	// Zones are the forward zones in configuration order, followed by the
 	// reverse zones.
 	Zones []*Zone
-	// DHCP are the subnets of the dhcp blocks, in configuration order.
-	DHCP []*Subnet
+	// DHCP are the subnets of the dhcp blocks, in configuration order;
+	// DHCPGlobal is the top level of dhcpd.conf, nil without a global dhcp
+	// block.
+	DHCP       []*Subnet
+	DHCPGlobal *DHCPGlobal
 	// Warnings do not stop the output from being written.
 	Warnings config.ErrorList
 	// Notes point out valid configurations that may not be intended, such
@@ -133,7 +136,7 @@ func (r *resolver) owner(pos config.Pos, what, name, origin string) (string, boo
 // is a config.ErrorList with every problem found; the warnings are
 // returned in either case.
 func Resolve(cfg *config.Config) (*Result, error) {
-	r := &resolver{cfg: cfg, macs: map[string]config.Pos{}}
+	r := &resolver{cfg: cfg, macs: map[string]config.Pos{}, notes: append(config.ErrorList{}, cfg.Notes...)}
 	global := defaults().with(cfg.Options)
 
 	var zones []*Zone
@@ -154,10 +157,11 @@ func Resolve(cfg *config.Config) (*Result, error) {
 		ptrs = append(ptrs, cands...)
 	}
 	zones = append(zones, r.reverse(global, ptrs)...)
+	r.checkNameservers(zones)
 	subnets := r.dhcp(r.dhcpHosts)
 	r.checkDHCPNameservers(zones, subnets)
 
-	res := &Result{Zones: zones, DHCP: subnets, Warnings: r.warns, Notes: r.notes}
+	res := &Result{Zones: zones, DHCP: subnets, DHCPGlobal: r.dhcpGlobal(), Warnings: r.warns, Notes: r.notes}
 	if len(r.errs) > 0 {
 		return &Result{Warnings: r.warns, Notes: r.notes}, r.errs
 	}
@@ -501,4 +505,71 @@ func (r *resolver) hostDHCP(cz *config.Zone, h config.Host, name string, addrs [
 		return
 	}
 	r.dhcpHosts = append(r.dhcpHosts, dhcpHost{pos: h.Pos, name: name, addrs: v4, macs: h.MACs, profile: profile})
+}
+
+// checkNameservers reports nameservers whose name lies in a forward zone
+// of the configuration but has no A or AAAA record there, or is a CNAME,
+// which RFC 2181 forbids. All records of such a zone come from the
+// configuration, so the address cannot come from elsewhere. Nameservers in
+// other zones are not checked.
+func (r *resolver) checkNameservers(zones []*Zone) {
+	// Records count only in their own zone: a name below a zone of its own
+	// must have its address there, not in the parent.
+	var forward []string
+	addrs := map[string]bool{}  // zone + " " + name
+	cnames := map[string]bool{} // zone + " " + name
+	for _, z := range zones {
+		if z.Reverse {
+			continue
+		}
+		zn := strings.ToLower(z.Name)
+		forward = append(forward, zn)
+		for _, a := range z.Addresses {
+			addrs[zn+" "+strings.ToLower(a.Name)] = true
+		}
+		for _, c := range z.CNAMEs {
+			cnames[zn+" "+strings.ToLower(c.Name)] = true
+		}
+	}
+	inZone := func(name string) string {
+		best := ""
+		for _, z := range forward {
+			if (name == z || strings.HasSuffix(name, "."+z)) && len(z) > len(best) {
+				best = z
+			}
+		}
+		return best
+	}
+
+	// Each nameserver statement once, with its own position.
+	type use struct {
+		pos  config.Pos
+		name string
+	}
+	var uses []use
+	for _, n := range r.cfg.Nameservers {
+		uses = append(uses, use{n.Pos, n.Name})
+	}
+	for _, cz := range r.cfg.Zones {
+		origin := strings.TrimSuffix(cz.Name, ".") + "."
+		for _, n := range cz.Nameservers {
+			uses = append(uses, use{n.Pos, absolute(n.Name, origin)})
+		}
+	}
+	for _, cr := range r.cfg.Reverse {
+		for _, n := range cr.Nameservers {
+			uses = append(uses, use{n.Pos, n.Name})
+		}
+	}
+	for _, u := range uses {
+		name := strings.ToLower(u.name)
+		z := inZone(name)
+		switch {
+		case z == "":
+		case cnames[z+" "+name]:
+			r.errorf(u.pos, "nameserver %s is a CNAME in zone %s; a nameserver needs an A or AAAA record (RFC 2181)", u.name, z)
+		case !addrs[z+" "+name]:
+			r.errorf(u.pos, "nameserver %s has no address: zone %s has no A or AAAA record for it", u.name, z)
+		}
+	}
 }

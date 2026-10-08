@@ -16,11 +16,12 @@ import (
 const maxDuration = math.MaxInt32 * time.Second
 
 var keywords = []string{
-	"alias", "cname", "default-lease-time", "dhcp", "dhcp-profile", "email",
-	"expire", "host", "inet", "inet6", "mac", "max-lease-time", "mx",
-	"nameserver", "network", "no", "option", "port", "priority", "profile",
-	"ptr", "range", "refresh", "retry", "reverse", "serial",
-	"server-identifier", "set", "srv", "ttl", "weight", "yes", "zone",
+	"alias", "authoritative", "cname", "default-lease-time", "dhcp",
+	"dhcp-profile", "email", "expire", "get-lease-hostnames", "host", "inet",
+	"inet6", "mac", "max-lease-time", "mx", "nameserver", "network", "no",
+	"not", "option", "port", "priority", "ptr", "range", "refresh",
+	"retry", "reverse", "serial", "server-identifier", "set", "srv", "ttl",
+	"weight", "yes", "zone",
 }
 
 // blockState tracks statement order inside a zone or reverse block.
@@ -60,6 +61,9 @@ func parse(op *obsdconf.Parser) (*Config, error) {
 	p := &parser{Parser: op, cfg: &Config{}}
 	if err := p.Parse(p.topLevel); err != nil {
 		return nil, err
+	}
+	for _, m := range p.UnusedMacros() {
+		p.cfg.Notes = append(p.cfg.Notes, &Error{Pos: m.Pos, Msg: fmt.Sprintf("note: macro %s is not used", m.Name)})
 	}
 	return p.cfg, nil
 }
@@ -107,9 +111,7 @@ func (p *parser) unknown(where string) bool {
 			p.Errorf(t.Pos, `"set" is not supported`)
 		}
 	case "dhcp-profile":
-		p.Errorf(t.Pos, `"dhcp-profile" is only allowed in a zone or on a host; profiles are defined in dhcp blocks`)
-	case "profile":
-		p.Errorf(t.Pos, `"profile" is only allowed in a dhcp block`)
+		p.Errorf(t.Pos, `"dhcp-profile" is defined in a dhcp block and used in a zone or on a host`)
 	case "mx-priority":
 		p.Errorf(t.Pos, `"mx-priority" is not supported, give the priority on each mx`)
 	case "srv-priority", "srv-weight":
@@ -535,14 +537,36 @@ func (p *parser) host() (Host, bool) {
 	}) {
 		return h, false
 	}
+	if !p.hostOptions(&h) {
+		return h, false
+	}
+	// The block form: the options one or more per line.
+	if p.Tok().Kind == obsdconf.LBrace {
+		if !p.Block(fmt.Sprintf("host %q", h.Name), func() bool {
+			return p.hostOptions(&h)
+		}) {
+			return h, false
+		}
+	}
+	if h.NoInet && h.NoInet6 {
+		p.Errorf(h.Pos, "host %q: no inet and no inet6 leave no addresses", h.Name)
+		return h, false
+	}
+	return h, true
+}
+
+// hostOptions parses the options of a host up to the end of the line or an
+// opening brace.
+func (p *parser) hostOptions(h *Host) bool {
 	for p.Tok().Kind == obsdconf.Word {
 		kw := p.Tok()
 		p.Next()
+		var ok bool
 		switch kw.Text {
 		case "alias":
 			if h.Aliases != nil {
 				p.Errorf(kw.Pos, "%q given twice", kw.Text)
-				return h, false
+				return false
 			}
 			ok = p.List(func() bool {
 				n, ok := p.name()
@@ -559,7 +583,7 @@ func (p *parser) host() (Host, bool) {
 		case "mac":
 			if h.MACs != nil {
 				p.Errorf(kw.Pos, "%q given twice", kw.Text)
-				return h, false
+				return false
 			}
 			ok = p.List(func() bool {
 				m, ok := p.mac()
@@ -571,20 +595,15 @@ func (p *parser) host() (Host, bool) {
 		case "ptr":
 			ok = once(p, kw, &h.PTR, true)
 		case "no":
-			ok = p.hostNo(&h)
+			ok = p.hostNo(h)
 		default:
 			p.Errorf(kw.Pos, "host: unknown option %q", kw.Text)
-			ok = false
 		}
 		if !ok {
-			return h, false
+			return false
 		}
 	}
-	if h.NoInet && h.NoInet6 {
-		p.Errorf(h.Pos, "host %q: no inet and no inet6 leave no addresses", h.Name)
-		return h, false
-	}
-	return h, true
+	return true
 }
 
 func (p *parser) hostNo(h *Host) bool {
@@ -818,7 +837,17 @@ func (p *parser) dhcpStmt(d *DHCP, where string) bool {
 		p.Next()
 		a, ok := p.hostAddr()
 		return ok && once(p, kw, &d.ServerID, a)
-	case "profile":
+	case "authoritative":
+		p.Next()
+		return once(p, kw, &d.Authoritative, true)
+	case "not":
+		p.Next()
+		t := p.Tok()
+		if !p.Expect("authoritative") {
+			return false
+		}
+		return once(p, t, &d.Authoritative, false)
+	case "dhcp-profile":
 		p.Next()
 		name, ok := p.name()
 		if !ok {
@@ -826,7 +855,7 @@ func (p *parser) dhcpStmt(d *DHCP, where string) bool {
 		}
 		for _, o := range d.Profiles {
 			if o.Name == name {
-				p.Errorf(kw.Pos, "profile %q already defined at %s", name, o.Pos)
+				p.Errorf(kw.Pos, "dhcp-profile %q already defined at %s", name, o.Pos)
 				return false
 			}
 		}
@@ -835,8 +864,8 @@ func (p *parser) dhcpStmt(d *DHCP, where string) bool {
 		if p.Tok().Kind != obsdconf.LBrace {
 			return p.Expected(`"{"`)
 		}
-		return p.Block(fmt.Sprintf("profile %q", name), func() bool {
-			return p.dhcpOption(&prof.DHCPOptions, "profile")
+		return p.Block(fmt.Sprintf("dhcp-profile %q", name), func() bool {
+			return p.dhcpOption(&prof.DHCPOptions, "dhcp-profile")
 		})
 	}
 	return p.dhcpOption(&d.DHCPOptions, where)
@@ -844,12 +873,14 @@ func (p *parser) dhcpStmt(d *DHCP, where string) bool {
 
 var dhcpOptionWords = map[string]bool{
 	"option": true, "default-lease-time": true, "max-lease-time": true,
+	"get-lease-hostnames": true,
 }
 
 // dhcpOptionNames are the options of dhcp-options(5) that zonefile-go
 // knows, with suffixes and checks for their values.
 var dhcpOptionNames = []string{
-	"routers", "domain-name-servers", "ntp-servers", "domain-name", "domain-search",
+	"routers", "domain-name-servers", "ntp-servers", "smtp-server",
+	"domain-name", "domain-search", "autoproxy-script",
 }
 
 // dhcpOption parses an option or a lease time of a dhcp block or profile
@@ -867,6 +898,9 @@ func (p *parser) dhcpOption(o *DHCPOptions, where string) bool {
 		return p.durationValue(kw, &o.Lease, 1)
 	case "max-lease-time":
 		return p.durationValue(kw, &o.MaxLease, 1)
+	case "get-lease-hostnames":
+		v, ok := p.Enum(`"true" or "false"`, "true", "false")
+		return ok && once(p, kw, &o.GetLeaseHostnames, v == "true")
 	}
 
 	t := p.Tok()
@@ -883,6 +917,11 @@ func (p *parser) dhcpOption(o *DHCPOptions, where string) bool {
 		return p.addrList(opt, &o.DNSServers)
 	case "ntp-servers":
 		return p.addrList(opt, &o.NTPServers)
+	case "smtp-server":
+		return p.addrList(opt, &o.SMTPServers)
+	case "autoproxy-script":
+		v, ok := p.Text("URL")
+		return ok && once(p, opt, &o.AutoproxyScript, v)
 	case "domain-name":
 		v, ok := p.name()
 		return ok && once(p, opt, &o.Domain, v)

@@ -182,6 +182,7 @@ zone example.com {
 	serial 7
 	host a 10.0.0.1 ttl 5m
 	host b 10.0.0.2 no ptr
+	host ns1 10.0.0.53 no ptr
 	srv _x._tcp a port 1 weight 3
 }
 `)
@@ -467,6 +468,7 @@ dhcp 192.168.21.0/24 {
 }
 zone example.com {
 	network { 192.168.21.0/24 fd00::/64 }
+	host ns1 .250 no ptr
 	host laptop .40 mac { 00:00:5e:00:53:67 00:00:5e:00:53:66 } dhcp
 	host printer .12 no inet6 mac 00:00:5e:00:53:12 dhcp
 	host server .2
@@ -517,8 +519,8 @@ func TestResolveDHCPErrors(t *testing.T) {
 			`test.conf:5: host y.a.example.: MAC address 00:00:5e:00:53:01 already used at test.conf:4`}},
 		{"zone dhcp, host outside network", "dhcp 10.0.0.0/24 {\n}\nzone a.example {\n\tdhcp\n\thost x 10.1.0.1 mac 00:00:5e:00:53:01\n}\n", []string{
 			`test.conf:7: host x.a.example.: dhcp needs an IPv4 address in the network of a dhcp block`}},
-		{"profile missing in subnet", "dhcp 10.0.0.0/24 {\n}\ndhcp 10.0.1.0/24 {\n\tprofile kids {\n\t}\n}\nzone a.example {\n\thost x 10.0.0.1 mac 00:00:5e:00:53:01 dhcp dhcp-profile kids\n}\n", []string{
-			`test.conf:10: host x.a.example.: profile kids is defined neither in dhcp 10.0.0.0/24 nor in the global dhcp block`}},
+		{"profile missing in subnet", "dhcp 10.0.0.0/24 {\n}\ndhcp 10.0.1.0/24 {\n\tdhcp-profile kids {\n\t}\n}\nzone a.example {\n\thost x 10.0.0.1 mac 00:00:5e:00:53:01 dhcp dhcp-profile kids\n}\n", []string{
+			`test.conf:10: host x.a.example.: dhcp-profile kids is defined neither in dhcp 10.0.0.0/24 nor in the global dhcp block`}},
 		{"server-identifier ipv6", "dhcp 10.0.0.0/24 {\n\tserver-identifier fd00::1\n}\n", []string{
 			`test.conf:3: dhcp 10.0.0.0/24: server-identifier fd00::1 is not an IPv4 address`}},
 		{"range outside", "dhcp 10.0.0.0/24 {\n\trange 10.0.1.1 10.0.1.9\n}\n", []string{
@@ -584,10 +586,10 @@ func TestResolveDHCPProfiles(t *testing.T) {
 	res, err := resolveAll(t, dhcpHead+`
 dhcp 10.0.0.0/24 {
 	option domain-name-servers .1
-	profile kids {
+	dhcp-profile kids {
 		option domain-name-servers .53
 	}
-	profile unused {
+	dhcp-profile unused {
 		default-lease-time 1h
 	}
 }
@@ -640,7 +642,7 @@ zone b.example {
 func TestResolveDHCPProfileWarnings(t *testing.T) {
 	res, err := resolveAll(t, dhcpHead+`
 dhcp 10.0.0.0/24 {
-	profile kids {
+	dhcp-profile kids {
 	}
 }
 zone a.example {
@@ -673,10 +675,10 @@ dhcp {
 	option domain-name example.com
 	default-lease-time 1d
 	max-lease-time 7d
-	profile kids {
+	dhcp-profile kids {
 		option domain-name-servers .53
 	}
-	profile spare {
+	dhcp-profile spare {
 		default-lease-time 1h
 	}
 }
@@ -687,7 +689,7 @@ dhcp 192.168.200.0/24 {
 	server-identifier .254
 	option domain-name-servers { .2 .3 }
 	default-lease-time 1h
-	profile kids {
+	dhcp-profile kids {
 		option domain-name-servers 192.168.21.53
 	}
 }
@@ -725,8 +727,8 @@ zone a.example {
 		notes = append(notes, n.Error())
 	}
 	want := []string{
-		`test.conf:24: note: profile kids in dhcp 192.168.200.0/24 hides the global profile kids at test.conf:10`,
-		`test.conf:13: note: profile spare is not used by any host with dhcp`,
+		`test.conf:24: note: dhcp-profile kids in dhcp 192.168.200.0/24 hides the global dhcp-profile kids at test.conf:10`,
+		`test.conf:13: note: dhcp-profile spare is not used by any host with dhcp`,
 	}
 	if !reflect.DeepEqual(notes, want) {
 		t.Errorf("notes:\n  %s\nwant\n  %s", strings.Join(notes, "\n  "), strings.Join(want, "\n  "))
@@ -771,10 +773,10 @@ nameserver ns1.example.com.
 dhcp {
 	option domain-name-servers .1
 	option domain-name example.com
-	profile kids {
+	dhcp-profile kids {
 		option domain-name-servers .53
 	}
-	profile other {
+	dhcp-profile other {
 		option domain-name other.example
 		option domain-name-servers .53
 	}
@@ -806,7 +808,7 @@ zone ext.example {
 		// The LAN gets ns1 itself: no note. The second network hands out a
 		// resolver outside: note. kids has a filtering resolver: note.
 		// other is for a zone that zonefile-go does not manage: no note.
-		`test.conf:7: note: dhcp 192.168.21.0/24, profile kids: option domain-name-servers 192.168.21.53 is not a nameserver of zone example.com. (ns1.example.com. is 192.168.21.1)`,
+		`test.conf:7: note: dhcp 192.168.21.0/24, dhcp-profile kids: option domain-name-servers 192.168.21.53 is not a nameserver of zone example.com. (ns1.example.com. is 192.168.21.1)`,
 		`test.conf:17: note: dhcp 192.168.22.0/24: option domain-name-servers 192.0.2.53 is not a nameserver of zone example.com. (ns1.example.com. is 192.168.21.1)`,
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -834,5 +836,117 @@ zone example.com {
 		if strings.Contains(n.Msg, "domain-name-servers") {
 			t.Errorf("unexpected note: %v", n)
 		}
+	}
+}
+
+func TestResolveDHCPMoreInherited(t *testing.T) {
+	res, err := resolveAll(t, dhcpHead+`
+dhcp {
+	not authoritative
+	get-lease-hostnames true
+	option smtp-server .25
+	option autoproxy-script "http://wpad.example.com/wpad.dat"
+}
+dhcp 10.0.0.0/24 {
+}
+dhcp 10.0.1.0/24 {
+	authoritative
+	get-lease-hostnames false
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// What does not depend on the subnet goes to the top level.
+	g := res.DHCPGlobal
+	if g == nil || g.Authoritative == nil || *g.Authoritative || g.GetLeaseHostnames == nil || !*g.GetLeaseHostnames ||
+		g.AutoproxyScript != "http://wpad.example.com/wpad.dat" || len(g.SMTPServers) != 0 {
+		t.Fatalf("global = %+v", g)
+	}
+	a, b := res.DHCP[0], res.DHCP[1]
+	// The suffix is resolved per subnet and written there; the rest is
+	// inherited, in effect but not written.
+	if a.Authoritative != nil || a.Write.GetLeaseHostnames != nil || a.Write.AutoproxyScript != "" ||
+		a.Write.SMTPServers[0].String() != "10.0.0.25" {
+		t.Errorf("first writes %+v", a.Write)
+	}
+	if a.GetLeaseHostnames == nil || !*a.GetLeaseHostnames || a.AutoproxyScript == "" {
+		t.Errorf("first in effect %+v", a.DHCPOptions)
+	}
+	if b.Authoritative == nil || !*b.Authoritative || b.Write.GetLeaseHostnames == nil || *b.Write.GetLeaseHostnames ||
+		b.Write.SMTPServers[0].String() != "10.0.1.25" {
+		t.Errorf("second = %+v", b)
+	}
+}
+
+func TestResolveDHCPServesNobody(t *testing.T) {
+	res, err := resolveAll(t, dhcpHead+`
+dhcp 10.0.0.0/24 {
+}
+dhcp 10.0.1.0/24 {
+	range .100 .199
+}
+dhcp 10.0.2.0/24 {
+}
+zone a.example {
+	host x 10.0.2.1 mac 00:00:5e:00:53:01 dhcp
+	host y 10.0.0.2 mac 00:00:5e:00:53:02
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, n := range res.Notes {
+		got = append(got, n.Error())
+	}
+	// Only the first serves nobody: y has a mac but no dhcp.
+	want := []string{`test.conf:4: note: dhcp 10.0.0.0/24 has no range and no host with dhcp; dhcpd answers no client there`}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("notes:\n  %s\nwant\n  %s", strings.Join(got, "\n  "), strings.Join(want, "\n  "))
+	}
+}
+
+func TestResolveNameserverAddress(t *testing.T) {
+	tests := []struct {
+		name, src string
+		want      []string
+	}{
+		{"no address", "email a@example.com\nnameserver ns1.example.com.\nzone example.com {\n\thost www 10.0.0.1\n}\n", []string{
+			`test.conf:2: nameserver ns1.example.com. has no address: zone example.com. has no A or AAAA record for it`}},
+		{"cname", "email a@example.com\nnameserver ns1.example.com.\nzone example.com {\n\thost www 10.0.0.1\n\tcname ns1 www\n}\n", []string{
+			`test.conf:2: nameserver ns1.example.com. is a CNAME in zone example.com.; a nameserver needs an A or AAAA record (RFC 2181)`}},
+		{"zone nameserver, relative", "email a@example.com\nzone example.com {\n\tnameserver ns\n\thost www 10.0.0.1\n}\n", []string{
+			`test.conf:3: nameserver ns.example.com. has no address: zone example.com. has no A or AAAA record for it`}},
+		{"most specific zone", "email a@example.com\nnameserver ns1.sub.example.com.\nzone example.com {\n\thost ns1.sub 10.0.0.1\n}\nzone sub.example.com {\n\thost www 10.0.0.2\n}\n", []string{
+			`test.conf:2: nameserver ns1.sub.example.com. has no address: zone sub.example.com. has no A or AAAA record for it`}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := resolve(t, tt.src)
+			var list config.ErrorList
+			if !errors.As(err, &list) {
+				t.Fatalf("err = %v, want ErrorList", err)
+			}
+			var got []string
+			for _, e := range list {
+				got = append(got, e.Error())
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("got\n  %s\nwant\n  %s", strings.Join(got, "\n  "), strings.Join(tt.want, "\n  "))
+			}
+		})
+	}
+	// A nameserver outside the managed zones and one with an alias are fine.
+	mustResolve(t, "email a@example.com\nnameserver { ns1.example.com. ns.example.net. }\nzone example.com {\n\thost router 10.0.0.1 alias ns1\n}\n")
+}
+
+func TestResolveUnusedMacroNote(t *testing.T) {
+	res, err := resolveAll(t, "unify = 192.0.2.10\nemail a@example.com\nnameserver ns.example.net.\nzone example.com {\n}\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Notes) != 1 || res.Notes[0].Error() != "test.conf:1: note: macro unify is not used" {
+		t.Errorf("notes = %v", res.Notes)
 	}
 }

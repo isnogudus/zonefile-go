@@ -188,7 +188,7 @@ func TestDhcpd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	golden(t, "dhcpd", Dhcpd(res.DHCP))
+	golden(t, "dhcpd", Dhcpd(res.DHCPGlobal, res.DHCP))
 }
 
 func TestNetmask(t *testing.T) {
@@ -214,12 +214,13 @@ func TestDhcpdKeywords(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out := string(Dhcpd(res.DHCP))
+	out := string(Dhcpd(res.DHCPGlobal, res.DHCP))
 	for _, kw := range []string{
 		"\n\tserver-identifier ", "\n\toption routers ", "\n\toption domain-name-servers ",
 		"\n\toption domain-name ", "\n\tdefault-lease-time ", "\n\trange ",
 		"\n\t\thardware ethernet ", "\n\t\tfixed-address ", "\n\t\toption host-name ",
-		"\n\tgroup {\n",
+		"\n\tgroup {\n", "\n\tauthoritative;\n", "\n\tget-lease-hostnames false;\n",
+		"\n\toption smtp-server ", "\n\toption autoproxy-script \"",
 	} {
 		if !strings.Contains(out, kw) {
 			t.Errorf("dhcpd.conf lacks %q", strings.TrimSpace(kw))

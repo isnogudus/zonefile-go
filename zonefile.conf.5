@@ -99,6 +99,8 @@ Macros are expanded where they are defined, and a reference must form a
 whole word:
 .Ar $prefix::1
 is not expanded.
+.Nm zonefile-go Fl n
+notes macros that are defined but never used.
 .Bl -tag -width Ds
 .It Ic include Ar file
 Read
@@ -242,8 +244,11 @@ The default priority is 0, here and at top level.
 .Op Ic mac Ar address | { address ... }
 .Op Oo Ic no Oc Ic dhcp
 .Op Ic dhcp-profile Ar name
+.Op { ... }
 .Xc
 Create one A or AAAA record per address.
+The options may also be given in a block after the addresses, one or more
+per line; each still only once.
 An address is a full IPv4 or IPv6 address, or a suffix such as
 .Cm .37
 or
@@ -304,6 +309,9 @@ An SRV record.
 The default priority is 5, the default weight 10.
 .El
 .Pp
+A nameserver whose name lies in a zone of the configuration must have an
+A or AAAA record in that zone and must not be a CNAME.
+.Pp
 Records can only be created within the zone: a host, alias,
 .Ic cname
 or
@@ -353,16 +361,35 @@ interface or a
 .Xr carp 4
 address.
 Not allowed in a profile.
+.It Oo Ic not Oc Ic authoritative
+Whether
+.Xr dhcpd 8
+answers requests for addresses that are wrong for the network with a
+DHCPNAK; by default it does.
+Not allowed in a profile.
 .It Ic option routers Ar address | { address ... }
 The default gateways; the addresses must lie within the network.
 .It Ic option domain-name-servers Ar address | { address ... }
 The resolvers of the clients.
 .It Ic option ntp-servers Ar address | { address ... }
 The NTP servers.
+.It Ic option smtp-server Ar address | { address ... }
+The SMTP servers.
 .It Ic option domain-name Ar name
 The domain of the clients.
 .It Ic option domain-search Ar name | { name ... }
 The search list of the clients.
+.It Ic option autoproxy-script Ar url
+The URL of the proxy configuration for the Web Proxy Autodiscovery
+Protocol.
+.It Ic get-lease-hostnames Cm true | false
+With
+.Cm true ,
+.Xr dhcpd 8
+looks up a name for every address of the dynamic ranges and hands it out
+as host name; addresses without a PTR record get a warning from
+.Xr dhcpd 8 .
+By default it does not.
 .It Ic default-lease-time Ar duration
 The lease time if the client asks for none.
 .It Ic max-lease-time Ar duration
@@ -373,13 +400,15 @@ must not be longer.
 Other options of
 .Xr dhcp-options 5
 are not supported.
-.It Ic profile Ar name No { ... }
+.It Ic dhcp-profile Ar name No { ... }
 Options for the hosts that name the profile with
-.Ic dhcp-profile :
+.Ic dhcp-profile
+in their line or zone:
 any of the statements above except
-.Ic range
+.Ic range ,
+.Ic server-identifier
 and
-.Ic server-identifier .
+.Ic authoritative .
 Each name may be used once per block.
 A profile in a
 .Ic dhcp
@@ -409,6 +438,13 @@ Options are inherited one by one: the global block, then the
 block, then the profile of a host; each level replaces the options it
 gives, lists as a whole.
 The checks apply to the result for each subnet.
+In the
+.Xr dhcpd.conf 5 ,
+the settings of the global block without suffixes stand at the top level,
+from where
+.Xr dhcpd 8
+passes them on; lists with suffixes are resolved and written into each
+subnet that does not give its own.
 .Pp
 Every host with a
 .Ic mac
@@ -438,7 +474,13 @@ block defines the name at all, zonefile-go warns.
 .Pp
 .Nm zonefile-go Fl n
 also shows notes about profiles that hide a global one or that no host
-uses, and about addresses in
+uses, about
+.Ic dhcp
+blocks with neither a
+.Ic range
+nor a host with
+.Ic dhcp ,
+which serve no client, and about addresses in
 .Ic option domain-name-servers
 that are not a nameserver of the zone named by
 .Ic option domain-name ,

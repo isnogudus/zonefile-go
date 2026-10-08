@@ -9,15 +9,34 @@ import (
 	"github.com/isnogudus/zonefile-go/internal/config"
 )
 
+// DHCPGlobal is what the global dhcp block gives for the top level of
+// dhcpd.conf: everything that does not depend on the subnet. dhcpd passes
+// it on to the subnets and groups itself.
+type DHCPGlobal struct {
+	// ServerID is invalid if the dhcpd default is kept, or if it is a
+	// suffix and so written into each subnet.
+	ServerID netip.Addr
+	// Authoritative is nil if the dhcpd default is kept.
+	Authoritative *bool
+	DHCPOptions
+}
+
 // Subnet is a dhcp block with all addresses resolved, and the hosts with
 // dhcp on whose IPv4 address lies in it.
 type Subnet struct {
 	Network netip.Prefix
 	Ranges  []Range
-	// ServerID is the address sent as server identifier; invalid if the
-	// dhcpd default is kept.
-	ServerID netip.Addr
+	// ServerID and Authoritative are written into the subnet; invalid or
+	// nil if it inherits them or the dhcpd default.
+	ServerID      netip.Addr
+	Authoritative *bool
+	// DHCPOptions are the options in effect for the subnet, after
+	// inheritance from the global block; the checks use them.
 	DHCPOptions
+	// Write are the options written into the subnet: those the block
+	// gives, and those of the global block that use suffixes and so differ
+	// per subnet. The rest comes from the top level of dhcpd.conf.
+	Write DHCPOptions
 	// Hosts are the hosts without a profile. Hosts here and in profiles are
 	// sorted by address, and for the same address in the order of the
 	// configuration.
@@ -31,15 +50,19 @@ type Subnet struct {
 // DHCPOptions are the options of a subnet or a profile. Zero values are
 // not written.
 type DHCPOptions struct {
-	Routers    []netip.Addr
-	DNSServers []netip.Addr
-	NTPServers []netip.Addr
+	Routers     []netip.Addr
+	DNSServers  []netip.Addr
+	NTPServers  []netip.Addr
+	SMTPServers []netip.Addr
 	// Domain and Search are without the trailing dot.
-	Domain string
-	Search []string
+	Domain          string
+	Search          []string
+	AutoproxyScript string
 	// Lease and MaxLease are in seconds.
 	Lease    uint32
 	MaxLease uint32
+	// GetLeaseHostnames is nil if the dhcpd default is kept.
+	GetLeaseHostnames *bool
 }
 
 // Profile is a profile of a dhcp block or the global dhcp block, resolved
@@ -103,7 +126,7 @@ func (r *resolver) subnetAddrs(pos config.Pos, n netip.Prefix, list []config.Hos
 		if !ok {
 			continue
 		}
-		if inside && !n.Contains(addr) {
+		if inside && n.IsValid() && !n.Contains(addr) {
 			r.errorf(pos, "dhcp %s: %s %s is outside the network", n, what, addr)
 			continue
 		}
@@ -129,6 +152,9 @@ func (r *resolver) dhcpOptions(pos config.Pos, n netip.Prefix, o config.DHCPOpti
 	out.Routers = r.subnetAddrs(pos, n, o.Routers, "option routers", true)
 	out.DNSServers = r.subnetAddrs(pos, n, o.DNSServers, "option domain-name-servers", false)
 	out.NTPServers = r.subnetAddrs(pos, n, o.NTPServers, "option ntp-servers", false)
+	out.SMTPServers = r.subnetAddrs(pos, n, o.SMTPServers, "option smtp-server", false)
+	override(&out.AutoproxyScript, o.AutoproxyScript)
+	out.GetLeaseHostnames = o.GetLeaseHostnames
 	if o.Domain != nil {
 		out.Domain = r.domainName(pos, *o.Domain)
 	}
@@ -151,6 +177,15 @@ func overlay(base, top DHCPOptions, set config.DHCPOptions) DHCPOptions {
 	}
 	if set.NTPServers != nil {
 		base.NTPServers = top.NTPServers
+	}
+	if set.SMTPServers != nil {
+		base.SMTPServers = top.SMTPServers
+	}
+	if set.AutoproxyScript != nil {
+		base.AutoproxyScript = top.AutoproxyScript
+	}
+	if set.GetLeaseHostnames != nil {
+		base.GetLeaseHostnames = top.GetLeaseHostnames
 	}
 	if set.Domain != nil {
 		base.Domain = top.Domain
@@ -228,16 +263,21 @@ func (r *resolver) dhcp(hosts []dhcpHost) []*Subnet {
 		if d.ServerID != nil {
 			s.ServerID, _ = r.subnetAddr(d.Pos, n, *d.ServerID, "server-identifier")
 		}
+		s.Authoritative = d.Authoritative
 		// Defaults, then the block, then the profile.
 		glob := r.cfg.DHCPDefaults
-		var base DHCPOptions
+		var base, perSubnet DHCPOptions
 		if glob != nil {
 			base = r.dhcpOptions(glob.Pos, n, glob.DHCPOptions)
-			if d.ServerID == nil && glob.ServerID != nil {
+			_, local := splitGlobal(glob.DHCPOptions)
+			perSubnet = overlay(DHCPOptions{}, base, local)
+			if d.ServerID == nil && glob.ServerID != nil && glob.ServerID.IsSuffix() {
 				s.ServerID, _ = r.subnetAddr(glob.Pos, n, *glob.ServerID, "server-identifier")
 			}
 		}
-		s.DHCPOptions = overlay(base, r.dhcpOptions(d.Pos, n, d.DHCPOptions), d.DHCPOptions)
+		own := r.dhcpOptions(d.Pos, n, d.DHCPOptions)
+		s.DHCPOptions = overlay(base, own, d.DHCPOptions)
+		s.Write = overlay(perSubnet, own, d.DHCPOptions)
 		r.checkLease(d.Pos, n, s.DHCPOptions)
 
 		addProfile := func(cp *config.DHCPProfile) {
@@ -259,7 +299,7 @@ func (r *resolver) dhcp(hosts []dhcpHost) []*Subnet {
 		for _, cp := range d.Profiles {
 			if glob != nil {
 				if i := slices.IndexFunc(glob.Profiles, func(g *config.DHCPProfile) bool { return g.Name == cp.Name }); i >= 0 {
-					r.notef(cp.Pos, "profile %s in dhcp %s hides the global profile %s at %s", cp.Name, n, cp.Name, glob.Profiles[i].Pos)
+					r.notef(cp.Pos, "dhcp-profile %s in dhcp %s hides the global dhcp-profile %s at %s", cp.Name, n, cp.Name, glob.Profiles[i].Pos)
 				}
 			}
 			addProfile(cp)
@@ -294,7 +334,7 @@ func (r *resolver) dhcp(hosts []dhcpHost) []*Subnet {
 			if h.profile != "" {
 				i := slices.IndexFunc(s.Profiles, func(p *Profile) bool { return p.Name == h.profile })
 				if i < 0 {
-					r.errorf(h.pos, "host %s: profile %s is defined neither in dhcp %s nor in the global dhcp block", h.name, h.profile, s.Network)
+					r.errorf(h.pos, "host %s: dhcp-profile %s is defined neither in dhcp %s nor in the global dhcp block", h.name, h.profile, s.Network)
 					continue
 				}
 				dst = &s.Profiles[i].Hosts
@@ -328,7 +368,7 @@ func (r *resolver) dhcp(hosts []dhcpHost) []*Subnet {
 	}
 	for _, cp := range all {
 		if !used[cp] {
-			r.notef(cp.Pos, "profile %s is not used by any host with dhcp", cp.Name)
+			r.notef(cp.Pos, "dhcp-profile %s is not used by any host with dhcp", cp.Name)
 		}
 	}
 
@@ -336,8 +376,15 @@ func (r *resolver) dhcp(hosts []dhcpHost) []*Subnet {
 	byAddr := func(a, b DHCPHost) int { return a.Addrs[0].Compare(b.Addrs[0]) }
 	for _, s := range subnets {
 		slices.SortStableFunc(s.Hosts, byAddr)
+		hosts := len(s.Hosts)
 		for _, p := range s.Profiles {
 			slices.SortStableFunc(p.Hosts, byAddr)
+			hosts += len(p.Hosts)
+		}
+		// Valid for a network dhcpd listens on but should not serve, yet
+		// also the result of a forgotten dhcp.
+		if len(s.Ranges) == 0 && hosts == 0 {
+			r.notef(s.pos, "dhcp %s has no range and no host with dhcp; dhcpd answers no client there", s.Network)
 		}
 	}
 	return subnets
@@ -405,7 +452,43 @@ func (r *resolver) checkDHCPNameservers(zones []*Zone, subnets []*Subnet) {
 			if len(p.DNSServers) > 0 {
 				servers = p.DNSServers
 			}
-			check(p.src.Pos, fmt.Sprintf("%s, profile %s", where, p.Name), domain, servers)
+			check(p.src.Pos, fmt.Sprintf("%s, dhcp-profile %s", where, p.Name), domain, servers)
 		}
 	}
+}
+
+// splitGlobal splits the options of the global dhcp block into those that
+// go to the top level of dhcpd.conf and those that use suffixes, which
+// differ per subnet and so go into each subnet.
+func splitGlobal(o config.DHCPOptions) (top, perSubnet config.DHCPOptions) {
+	top = o
+	hasSuffix := func(l []config.HostAddr) bool {
+		return slices.ContainsFunc(l, config.HostAddr.IsSuffix)
+	}
+	for _, f := range []struct{ top, per *[]config.HostAddr }{
+		{&top.Routers, &perSubnet.Routers},
+		{&top.DNSServers, &perSubnet.DNSServers},
+		{&top.NTPServers, &perSubnet.NTPServers},
+		{&top.SMTPServers, &perSubnet.SMTPServers},
+	} {
+		if hasSuffix(*f.top) {
+			*f.per, *f.top = *f.top, nil
+		}
+	}
+	return top, perSubnet
+}
+
+// dhcpGlobal returns the top level of dhcpd.conf from the global dhcp
+// block, or nil without one.
+func (r *resolver) dhcpGlobal() *DHCPGlobal {
+	g := r.cfg.DHCPDefaults
+	if g == nil {
+		return nil
+	}
+	top, _ := splitGlobal(g.DHCPOptions)
+	out := &DHCPGlobal{Authoritative: g.Authoritative, DHCPOptions: r.dhcpOptions(g.Pos, netip.Prefix{}, top)}
+	if g.ServerID != nil && !g.ServerID.IsSuffix() {
+		out.ServerID, _ = r.subnetAddr(g.Pos, netip.Prefix{}, *g.ServerID, "server-identifier")
+	}
+	return out
 }

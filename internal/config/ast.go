@@ -27,6 +27,9 @@ type Config struct {
 	// DHCPDefaults is the dhcp block without a network, if any. Its
 	// Network is the zero Prefix, and it has no Ranges.
 	DHCPDefaults *DHCP
+	// Notes point out what the parser found valid but possibly
+	// unintended, such as macros that are not used.
+	Notes ErrorList
 }
 
 // Options holds the settings of one scope: email, ttl and the other SOA
@@ -133,6 +136,8 @@ type DHCP struct {
 	Network  netip.Prefix
 	Ranges   []DHCPRange
 	ServerID *HostAddr
+	// Authoritative is set by authoritative and not authoritative.
+	Authoritative *bool
 	DHCPOptions
 	Profiles []*DHCPProfile
 }
@@ -142,13 +147,16 @@ type DHCP struct {
 // option domain-name, option domain-search, default-lease-time and
 // max-lease-time.
 type DHCPOptions struct {
-	Routers    []HostAddr
-	DNSServers []HostAddr
-	NTPServers []HostAddr
-	Domain     *string
-	Search     []string
-	Lease      *uint32
-	MaxLease   *uint32
+	Routers           []HostAddr
+	DNSServers        []HostAddr
+	NTPServers        []HostAddr
+	SMTPServers       []HostAddr
+	Domain            *string
+	Search            []string
+	AutoproxyScript   *string
+	Lease             *uint32
+	MaxLease          *uint32
+	GetLeaseHostnames *bool
 }
 
 // DHCPProfile is a profile in a dhcp block: options for the hosts that

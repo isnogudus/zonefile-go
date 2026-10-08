@@ -359,7 +359,7 @@ func TestParseDHCPErrors(t *testing.T) {
 		name, src, want string
 	}{
 		{"server-identifier twice", "dhcp 10.0.0.0/8 {\n\tserver-identifier .1\n\tserver-identifier .2\n}\n", `test.conf:3: "server-identifier" given twice`},
-		{"server-identifier in profile", "dhcp 10.0.0.0/8 {\n\tprofile a {\n\t\tserver-identifier .1\n\t}\n}\n", `test.conf:3: unknown statement "server-identifier" in profile`},
+		{"server-identifier in profile", "dhcp 10.0.0.0/8 {\n\tdhcp-profile a {\n\t\tserver-identifier .1\n\t}\n}\n", `test.conf:3: unknown statement "server-identifier" in dhcp-profile`},
 		{"global block twice", "dhcp {\n}\ndhcp {\n}\n", `test.conf:3: global dhcp block already defined at test.conf:1`},
 		{"range in global block", "dhcp {\n\trange .1 .9\n}\n", `test.conf:2: "range" is not allowed in the global dhcp block`},
 		{"unknown in global block", "dhcp {\n\tgateway .1\n}\n", `test.conf:2: unknown statement "gateway" in global dhcp block`},
@@ -367,7 +367,11 @@ func TestParseDHCPErrors(t *testing.T) {
 		{"no block", "dhcp 10.0.0.0/8\n", `test.conf:1: expected "{", got end of line`},
 		{"unknown", "dhcp 10.0.0.0/8 {\n\tgateway .1\n}\n", `test.conf:2: unknown statement "gateway" in dhcp block`},
 		{"twice", "dhcp 10.0.0.0/8 {\n\toption routers .1\n\toption routers .2\n}\n", `test.conf:3: "option routers" given twice`},
-		{"unknown option", "dhcp 10.0.0.0/8 {\n\toption tftp-server-name boot\n}\n", `test.conf:2: unknown dhcp option "tftp-server-name", known are routers, domain-name-servers, ntp-servers, domain-name, domain-search`},
+		{"unknown option", "dhcp 10.0.0.0/8 {\n\toption tftp-server-name boot\n}\n", `test.conf:2: unknown dhcp option "tftp-server-name", known are routers, domain-name-servers, ntp-servers, smtp-server, domain-name, domain-search, autoproxy-script`},
+		{"authoritative in profile", "dhcp 10.0.0.0/8 {\n\tdhcp-profile a {\n\t\tauthoritative\n\t}\n}\n", `test.conf:3: unknown statement "authoritative" in dhcp-profile`},
+		{"not what", "dhcp 10.0.0.0/8 {\n\tnot ptr\n}\n", `test.conf:2: expected "authoritative", got "ptr"`},
+		{"authoritative twice", "dhcp 10.0.0.0/8 {\n\tauthoritative\n\tnot authoritative\n}\n", `test.conf:3: "authoritative" given twice`},
+		{"get-lease-hostnames value", "dhcp 10.0.0.0/8 {\n\tget-lease-hostnames yes\n}\n", `test.conf:2: expected "true" or "false", got "yes"`},
 		{"option without name", "dhcp 10.0.0.0/8 {\n\toption\n}\n", `test.conf:2: expected option name, got end of line`},
 		{"old word", "dhcp 10.0.0.0/8 {\n\trouter .1\n}\n", `test.conf:2: unknown statement "router" in dhcp block`},
 		{"dhcp twice", "zone a {\n\thost x 10.0.0.1 dhcp no dhcp\n}\n", `test.conf:2: "dhcp" given twice`},
@@ -391,11 +395,11 @@ func TestParseDHCPProfiles(t *testing.T) {
 	cfg := mustParse(t, `
 dhcp 192.168.21.0/24 {
 	option domain-name-servers .1
-	profile kids {
+	dhcp-profile kids {
 		option domain-name-servers .53
 		default-lease-time 1h
 	}
-	profile iot {
+	dhcp-profile iot {
 		option routers .254
 	}
 }
@@ -422,11 +426,10 @@ func TestParseDHCPProfileErrors(t *testing.T) {
 	tests := []struct {
 		name, src, want string
 	}{
-		{"duplicate", "dhcp 10.0.0.0/8 {\n\tprofile a {\n\t}\n\tprofile a {\n\t}\n}\n", `test.conf:4: profile "a" already defined at test.conf:2`},
-		{"range in profile", "dhcp 10.0.0.0/8 {\n\tprofile a {\n\t\trange .1 .2\n\t}\n}\n", `test.conf:3: unknown statement "range" in profile`},
-		{"profile at top level", "profile a {\n}\n", `test.conf:1: "profile" is only allowed in a dhcp block`},
-		{"profile in zone", "zone a {\n\tprofile b {\n\t}\n}\n", `test.conf:2: "profile" is only allowed in a dhcp block`},
-		{"dhcp-profile at top level", "dhcp-profile a\n", `test.conf:1: "dhcp-profile" is only allowed in a zone or on a host; profiles are defined in dhcp blocks`},
+		{"duplicate", "dhcp 10.0.0.0/8 {\n\tdhcp-profile a {\n\t}\n\tdhcp-profile a {\n\t}\n}\n", `test.conf:4: dhcp-profile "a" already defined at test.conf:2`},
+		{"range in profile", "dhcp 10.0.0.0/8 {\n\tdhcp-profile a {\n\t\trange .1 .2\n\t}\n}\n", `test.conf:3: unknown statement "range" in dhcp-profile`},
+		{"definition without block", "dhcp 10.0.0.0/8 {\n\tdhcp-profile a\n}\n", `test.conf:2: expected "{", got end of line`},
+		{"dhcp-profile at top level", "dhcp-profile a\n", `test.conf:1: "dhcp-profile" is defined in a dhcp block and used in a zone or on a host`},
 		{"dhcp-profile after record", "zone a {\n\thost x 10.0.0.1\n\tdhcp-profile b\n}\n", `test.conf:3: "dhcp-profile" must come before the first record`},
 		{"dhcp-profile twice", "zone a {\n\thost x 10.0.0.1 dhcp-profile b dhcp-profile c\n}\n", `test.conf:2: "dhcp-profile" given twice`},
 	}
@@ -434,6 +437,68 @@ func TestParseDHCPProfileErrors(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := Parse("test.conf", strings.NewReader(tt.src))
 			if err == nil || err.Error() != tt.want {
+				t.Errorf("err = %v\nwant  %s", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseDHCPMore(t *testing.T) {
+	cfg := mustParse(t, `
+dhcp {
+	not authoritative
+	get-lease-hostnames true
+}
+dhcp 10.0.0.0/24 {
+	authoritative
+	option smtp-server { .25 192.0.2.25 }
+	option autoproxy-script "http://wpad.example.com/wpad.dat"
+}
+`)
+	g, d := cfg.DHCPDefaults, cfg.DHCP[0]
+	if g.Authoritative == nil || *g.Authoritative || g.GetLeaseHostnames == nil || !*g.GetLeaseHostnames {
+		t.Errorf("global = %+v", g)
+	}
+	if d.Authoritative == nil || !*d.Authoritative || len(d.SMTPServers) != 2 ||
+		*d.AutoproxyScript != "http://wpad.example.com/wpad.dat" {
+		t.Errorf("block = %+v", d)
+	}
+}
+
+func TestParseHostBlock(t *testing.T) {
+	cfg := mustParse(t, `
+zone example.com {
+	host tv .20 ttl 1h {
+		alias { www media }
+		mac 00:00:5e:00:53:20
+		dhcp dhcp-profile kids
+		no ptr
+	}
+	host pc .30
+}
+`)
+	h := cfg.Zones[0].Hosts[0]
+	if len(h.Aliases) != 2 || len(h.MACs) != 1 || h.DHCP == nil || !*h.DHCP ||
+		*h.DHCPProfile != "kids" || h.PTR == nil || *h.PTR || *h.TTL != 3600 {
+		t.Errorf("host = %+v", h)
+	}
+	if len(cfg.Zones[0].Hosts) != 2 {
+		t.Errorf("hosts = %d, want 2", len(cfg.Zones[0].Hosts))
+	}
+}
+
+func TestParseHostBlockErrors(t *testing.T) {
+	tests := []struct {
+		name, src, want string
+	}{
+		{"option twice", "zone a {\n\thost x .1 ttl 1h {\n\t\tttl 2h\n\t}\n}\n", `test.conf:3: "ttl" given twice`},
+		{"unknown option", "zone a {\n\thost x .1 {\n\t\tcname y\n\t}\n}\n", `test.conf:3: host: unknown option "cname"`},
+		{"missing brace", "zone a {\n\thost x .1 {\n\t\tdhcp\n}\n", `test.conf:1: zone "a": missing "}"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Parse("test.conf", strings.NewReader(tt.src))
+			if err == nil || !strings.HasPrefix(err.Error(), tt.want) {
 				t.Errorf("err = %v\nwant  %s", err, tt.want)
 			}
 		})

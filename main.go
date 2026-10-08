@@ -83,7 +83,7 @@ func main() {
 		if len(res.DHCP) == 0 {
 			fatal(fmt.Errorf("%s: no dhcp blocks", *file))
 		}
-		if err := writeFile(*outPath, output.Dhcpd(res.DHCP)); err != nil {
+		if err := writeFile(*outPath, output.Dhcpd(res.DHCPGlobal, res.DHCP)); err != nil {
 			fatal(err)
 		}
 		return

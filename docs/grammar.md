@@ -125,7 +125,8 @@ dhcp-profile  = "dhcp-profile" name .
 
 network       = "network" net-list .
 
-host          = "host" name host-addrs { host-opt } .
+host          = "host" name host-addrs { host-opt }
+                [ "{" NL { [ host-opt { host-opt } ] NL } "}" ] .
 host-addrs    = host-addr | "{" host-addr { [ "," ] host-addr } "}" .
 host-addr     = ADDRESS | SUFFIX .
 host-opt      = "alias" name-list
@@ -151,13 +152,17 @@ reverse-stmt  = setting | nameserver .
 dhcp          = "dhcp" [ NETWORK ] "{" NL { [ dhcp-stmt ] NL } "}" .
 dhcp-stmt     = "range" host-addr host-addr
               | "server-identifier" host-addr
-              | "profile" name "{" NL { [ dhcp-option ] NL } "}"
+              | "authoritative" | "not" "authoritative"
+              | "dhcp-profile" name "{" NL { [ dhcp-option ] NL } "}"
               | dhcp-option .
 dhcp-option   = "option" "routers" host-addrs
               | "option" "domain-name-servers" host-addrs
               | "option" "ntp-servers" host-addrs
+              | "option" "smtp-server" host-addrs
               | "option" "domain-name" name
               | "option" "domain-search" name-list
+              | "option" "autoproxy-script" ( WORD | STRING )
+              | "get-lease-hostnames" ( "true" | "false" )
               | "default-lease-time" duration
               | "max-lease-time" duration .
 
@@ -300,6 +305,23 @@ It is an error if
 host NAME ADDRESS|SUFFIX|{ … } [alias NAME|{ NAME … }] [ttl D]
      [no ptr] [no inet] [no inet6] [mac MAC|{ MAC … }] [[no] dhcp]
      [dhcp-profile NAME]
+
+host NAME ADDRESS|SUFFIX|{ … } [option …] {
+	option …
+	…
+}
+```
+
+A host with many options may give them in a block instead, one or more
+per line; the addresses stay in the first line. Each option may still be
+given only once, in the line or in the block:
+
+```
+host tv .20 {
+	alias www
+	mac 00:00:5e:00:53:20
+	dhcp dhcp-profile kids
+}
 ```
 
 Creates one A or AAAA record per address. A suffix expands to one address
@@ -386,11 +408,15 @@ zonefile.conf: suffixes for addresses, lists in braces, durations such as
 |-------------------------------|-----------------------------------------------|
 | `range`                       | dynamic addresses; may be given several times |
 | `server-identifier`           | address the clients use to reach this server; not in a profile |
+| `authoritative`, `not authoritative` | whether dhcpd answers wrong requests with DHCPNAK; not in a profile |
 | `option routers`              | default gateways; must lie within the network |
 | `option domain-name-servers`  | resolvers of the clients                      |
 | `option ntp-servers`          | NTP servers                                   |
+| `option smtp-server`          | SMTP servers                                  |
 | `option domain-name`          | domain of the clients                         |
 | `option domain-search`        | search list of the clients                    |
+| `option autoproxy-script`     | URL of the proxy configuration (WPAD)         |
+| `get-lease-hostnames`         | `true` looks up a name for each dynamic address |
 | `default-lease-time`          | lease time if the client asks for none        |
 | `max-lease-time`              | longest lease time                            |
 
@@ -419,15 +445,20 @@ whole; lists such as `nameserver { … }` are replaced, not merged. Checks
 apply to the result for each subnet: `option routers` of the global block
 must lie in every network, and `default-lease-time` must not be longer
 than `max-lease-time`
-whichever level gives them. In `dhcpd.conf` the inherited values are
-written into each subnet.
+whichever level gives them.
+
+In `dhcpd.conf`, whatever the global block gives without suffixes stands
+at the top level, and dhcpd passes it on to the subnets and groups. Lists
+with suffixes differ per subnet, so they are resolved and written into
+each subnet that does not give its own. A subnet holds only what its
+block gives and these resolved values.
 
 #### Profiles
 
 ```
 dhcp 192.168.21.0/24 {
 	option domain-name-servers .1
-	profile kids {
+	dhcp-profile kids {
 		option domain-name-servers .53
 	}
 }
@@ -437,9 +468,10 @@ zone example.com {
 }
 ```
 
-A `profile` holds options for some hosts: the options of a dhcp block,
-without `range` and `server-identifier`. Hosts and zones name it with
-`dhcp-profile`. A profile may stand in the global dhcp block, where it
+A `dhcp-profile` block holds options for some hosts: the options of a
+dhcp block, without `range`, `server-identifier` and `authoritative`.
+Hosts and zones name it with `dhcp-profile` as well, so that one word
+finds the definition and every use. A profile may stand in the global dhcp block, where it
 serves every network and is resolved for each, or in a dhcp block, where
 it serves that network. A host gets the profile of the dhcp block that
 holds its address, or else the global one; a profile in a dhcp block
@@ -455,8 +487,13 @@ defines the name at all, to catch typing errors early.
 `zonefile-go -n` adds notes for valid configurations that may not be
 intended. The normal run does not show them.
 
+- A macro is defined but never used, as `pfctl` points out; it is often a
+  typing error.
 - A profile hides a global one of the same name.
 - A profile is used by no host with dhcp.
+- A dhcp block has neither a `range` nor a host with dhcp, so dhcpd
+  answers no client there. That is right for a network dhcpd listens on
+  but should not serve, and wrong if a `dhcp` was forgotten.
 - An address in `option domain-name-servers` is not a nameserver of the
   zone named by `option domain-name`, checked for each subnet and each
   profile in use after inheritance. The NS names of the zone are resolved
@@ -519,6 +556,11 @@ New checks, which `zonefile-rs` does not enforce:
   alias with *different* addresses (round robin).
 - **CNAMEs:** a CNAME must not share its name with any other record,
   including the zone apex.
+- **Nameservers:** a nameserver whose name lies in a zone of the
+  configuration needs an A or AAAA record in that zone, the most specific
+  one, and must not be a CNAME (RFC 2181). All records of such a zone come
+  from the configuration, so a missing address is an error. Nameservers
+  outside the managed zones are not checked.
 - **Out-of-zone data:** hosts, aliases, CNAMEs and SRV records must have
   names within their zone, e.g. `alias mail.h.example.net.` in `zone
   home.arpa` is an error. NSD would reject such a zone file. Targets may
